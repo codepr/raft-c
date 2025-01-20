@@ -204,6 +204,15 @@ static uint32_t read_u32(const uint8_t *const buf)
  ** RPC structure definition
  **/
 
+// Generic header to identify requests
+
+typedef enum message_type {
+    MT_REQUEST_VOTE_RQ,
+    MT_REQUEST_VOTE_RS,
+    MT_APPEND_ENTRIES_RQ,
+    MT_APPEND_ENTRIES_RS
+} message_type_t;
+
 // RequestVoteRPC
 
 typedef struct request_vote_rpc {
@@ -220,8 +229,11 @@ typedef struct request_vote_response {
 
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 {
+    // Message type
+    int bytes = write_u8(buf++, MT_REQUEST_VOTE_RQ);
+
     // term
-    int bytes = write_u32(buf, rv->term);
+    bytes += write_u32(buf, rv->term);
     buf += sizeof(uint32_t);
 
     // candidate_id
@@ -242,8 +254,11 @@ static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 static int request_vote_response_write(uint8_t *buf,
                                        const request_vote_response_t *rv)
 {
+    // Message type
+    int bytes = write_u8(buf++, MT_REQUEST_VOTE_RS);
+
     // term
-    int bytes = write_u32(buf, rv->term);
+    bytes += write_u32(buf, rv->term);
     buf += sizeof(uint32_t);
 
     bytes += write_u8(buf++, rv->vote_granted);
@@ -298,9 +313,11 @@ typedef struct append_entries_response {
 
 static int append_entries_rpc_write(uint8_t *buf,
                                     const append_entries_rpc_t *ae)
-{
+{ // Message type
+    int bytes = write_u8(buf++, MT_APPEND_ENTRIES_RQ);
+
     // term
-    int bytes = write_u32(buf, ae->term);
+    bytes += write_u32(buf, ae->term);
     buf += sizeof(uint32_t);
 
     // leader_id
@@ -335,8 +352,11 @@ static int append_entries_rpc_write(uint8_t *buf,
 static int append_entries_response_write(uint8_t *buf,
                                          const append_entries_response_t *ae)
 {
+    // Message type
+    int bytes = write_u8(buf++, MT_APPEND_ENTRIES_RS);
+
     // term
-    int bytes = write_u32(buf, ae->term);
+    bytes += write_u32(buf, ae->term);
     buf += sizeof(uint32_t);
 
     bytes += write_u8(buf++, ae->success);
@@ -372,13 +392,42 @@ static int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
     return 0;
 }
 
-static int append_entries_reponse_reqd(append_entries_response_t *ae,
-                                       const uint8_t *buf)
+static int append_entries_response_read(append_entries_response_t *ae,
+                                        const uint8_t *buf)
 {
     ae->term = read_u32(buf);
     buf += sizeof(uint32_t);
     ae->success = read_u8(buf++);
     return 0;
+}
+
+typedef union raft_message {
+    request_vote_rpc_t request_vote_rpc;
+    request_vote_response_t request_vote_response;
+    append_entries_rpc_t append_entries_rpc;
+    append_entries_response_t append_entries_response;
+} raft_message_t;
+
+static message_type_t message_read(const uint8_t *buf,
+                                   raft_message_t *raft_message)
+{
+    message_type_t message_type = read_u8(buf++);
+    switch (message_type) {
+    case MT_APPEND_ENTRIES_RQ:
+        append_entries_rpc_read(&raft_message->append_entries_rpc, buf);
+        break;
+    case MT_APPEND_ENTRIES_RS:
+        append_entries_response_read(&raft_message->append_entries_response,
+                                     buf);
+        break;
+    case MT_REQUEST_VOTE_RQ:
+        request_vote_rpc_read(&raft_message->request_vote_rpc, buf);
+        break;
+    case MT_REQUEST_VOTE_RS:
+        request_vote_response_read(&raft_message->request_vote_response, buf);
+        break;
+    }
+    return message_type;
 }
 
 /**
@@ -411,6 +460,130 @@ typedef struct raft_state {
         } leader_volatile;
     };
 } raft_state_t;
+
+static raft_state_t raft_state = {0};
+
+static void transition_to_leader(void) { raft_state.state = RS_LEADER; }
+
+static void transition_to_follower(void) { raft_state.state = RS_FOLLOWER; }
+
+static void transition_to_candidate(void) { raft_state.state = RS_CANDIDATE; }
+
+static int send_append_entries(int fd, const append_entries_rpc_t *ae)
+{
+    uint8_t buf[BUFSIZ];
+    size_t length = append_entries_rpc_write(&buf[0], ae);
+    return send(fd, buf, length, 0);
+}
+
+static int send_request_vote(int fd, const request_vote_rpc_t *rv)
+{
+    uint8_t buf[BUFSIZ];
+    size_t length = request_vote_rpc_write(&buf[0], rv);
+    return send(fd, buf, length, 0);
+}
+
+static void handle_request_vote_rq(const request_vote_rpc_t *rv) {}
+
+static void handle_request_vote_rs(const request_vote_response_t *rv) {}
+
+static void handle_append_entries_rq(const append_entries_rpc_t *ae) {}
+
+static void handle_append_entries_rs(const append_entries_response_t *ae) {}
+
+static void server_start(int server_fd)
+{
+    fd_set read_fds;
+    int max_fd     = server_fd;
+    int num_events = 0, i = 0;
+    unsigned char buf[BUFSIZ];
+    int client_fds[FD_SETSIZE];
+    struct timeval tv               = {2, 0};
+
+    unsigned long long remaining_us = 0, last_update_time_us = 0;
+
+    // Initialize client_fds array
+    for (i = 0; i < FD_SETSIZE; i++) {
+        client_fds[i] = -1;
+    }
+
+    transition_to_candidate();
+
+    while (1) {
+        memset(buf, 0x00, sizeof(buf));
+
+        FD_ZERO(&read_fds);
+        FD_SET(server_fd, &read_fds);
+
+        // Re-arm client descriptors to be monitored by the select call
+        for (i = 0; i < FD_SETSIZE; ++i) {
+            if (client_fds[i] >= 0) {
+                FD_SET(client_fds[i], &read_fds);
+                if (client_fds[i] > max_fd)
+                    max_fd = client_fds[i];
+            }
+        }
+
+        num_events = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
+        if (num_events < 0) {
+            fprintf(stderr, "select() error: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+
+        if (FD_ISSET(server_fd, &read_fds)) {
+            // New connection
+            int client_fd = tcp_accept(server_fd);
+            if (client_fd < 0) {
+                fprintf(stderr, "accept() error: %s\n", strerror(errno));
+                continue;
+            }
+
+            for (i = 0; i < FD_SETSIZE; ++i) {
+                if (client_fds[i] < 0) {
+                    client_fds[i] = client_fd;
+                    break;
+                }
+            }
+
+            if (i == FD_SETSIZE) {
+                fprintf(stderr, "too many clients connected");
+                close(client_fd);
+                continue;
+            }
+        }
+
+        for (i = 0; i < FD_SETSIZE; ++i) {
+            int fd = client_fds[i];
+            if (fd >= 0 && FD_ISSET(fd, &read_fds)) {
+                // TODO read data here
+                raft_message_t raft_message;
+                ssize_t n = recv(fd, buf, sizeof(buf), 0);
+                if (n <= 0) {
+                    close(fd);
+                    client_fds[i] = -1;
+                    printf("Client disconnected\n");
+                    continue;
+                }
+                message_type_t message_type = message_read(buf, &raft_message);
+                switch (message_type) {
+                case MT_APPEND_ENTRIES_RQ:
+                    handle_append_entries_rq(&raft_message.append_entries_rpc);
+                    break;
+                case MT_APPEND_ENTRIES_RS:
+                    handle_append_entries_rs(
+                        &raft_message.append_entries_response);
+                    break;
+                case MT_REQUEST_VOTE_RQ:
+                    handle_request_vote_rq(&raft_message.request_vote_rpc);
+                    break;
+                case MT_REQUEST_VOTE_RS:
+                    handle_request_vote_rs(&raft_message.request_vote_response);
+                    break;
+                }
+            }
+        }
+    }
+}
 
 int main(void)
 {
