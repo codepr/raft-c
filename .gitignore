@@ -1,0 +1,17 @@
+*.d
+*.o
+*.so
+*.ko
+*.obj
+*.elf
+*.ghc
+*.pch
+*.lib
+*.a
+*.la
+*.lo
+*.out
+*.hex
+*.dSYM/
+*.su
+raft-c
