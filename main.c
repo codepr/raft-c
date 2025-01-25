@@ -13,6 +13,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define RANDOM(a, b) rand() % ((b) + 1 - (a)) + (a)
+
 /**
  ** Dynamic array utility macros
  **/
@@ -46,11 +48,9 @@
  ** UDP network utility functions
  **/
 
-#define BACKLOG        128
-#define CLIENT_TIMEOUT 10000
-#define MAX_NODES      15
-#define NODES_COUNT    3
-#define RANDOM(a, b)   rand() % ((b) + 1 - (a)) + (a)
+#define BACKLOG     128
+#define MAX_NODES   15
+#define NODES_COUNT 3
 
 static int set_nonblocking(int fd)
 {
@@ -391,23 +391,21 @@ typedef union raft_message {
     append_entries_response_t append_entries_response;
 } raft_message_t;
 
-static message_type_t message_read(const uint8_t *buf,
-                                   raft_message_t *raft_message)
+static message_type_t message_read(const uint8_t *buf, raft_message_t *rm)
 {
     message_type_t message_type = read_u8(buf++);
     switch (message_type) {
     case MT_APPEND_ENTRIES_RQ:
-        append_entries_rpc_read(&raft_message->append_entries_rpc, buf);
+        append_entries_rpc_read(&rm->append_entries_rpc, buf);
         break;
     case MT_APPEND_ENTRIES_RS:
-        append_entries_response_read(&raft_message->append_entries_response,
-                                     buf);
+        append_entries_response_read(&rm->append_entries_response, buf);
         break;
     case MT_REQUEST_VOTE_RQ:
-        request_vote_rpc_read(&raft_message->request_vote_rpc, buf);
+        request_vote_rpc_read(&rm->request_vote_rpc, buf);
         break;
     case MT_REQUEST_VOTE_RS:
-        request_vote_response_read(&raft_message->request_vote_response, buf);
+        request_vote_response_read(&rm->request_vote_response, buf);
         break;
     }
     return message_type;
@@ -450,7 +448,7 @@ typedef struct raft_state {
 } raft_state_t;
 
 static raft_state_t raft_state = {0};
-static int node_nr             = 1;
+static int node_nr             = 3;
 static int votes_received      = 0;
 static int node_id             = 0;
 
@@ -487,7 +485,6 @@ static int send_append_entries(int fd, const struct sockaddr_in *peer,
 {
     uint8_t buf[BUFSIZ];
     size_t length = append_entries_rpc_write(&buf[0], ae);
-    // return send(fd, buf, length, 0);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -496,7 +493,6 @@ static int send_append_entries_response(int fd, const struct sockaddr_in *peer,
 {
     uint8_t buf[BUFSIZ];
     size_t length = append_entries_response_write(&buf[0], ae);
-    // return send(fd, buf, length, 0);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -505,7 +501,6 @@ static int send_request_vote(int fd, const struct sockaddr_in *peer,
 {
     uint8_t buf[BUFSIZ];
     size_t length = request_vote_rpc_write(&buf[0], rv);
-    // return send(fd, buf, length, 0);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -514,7 +509,6 @@ static int send_request_vote_response(int fd, const struct sockaddr_in *peer,
 {
     uint8_t buf[BUFSIZ];
     size_t length = request_vote_response_write(&buf[0], rv);
-    // return send(fd, buf, length, 0);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -524,7 +518,7 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
         return;
 
     printf("[INFO] Start election current_term=%d\n", raft_state.current_term);
-    votes_received = 0;
+    votes_received = 1;
     raft_state.current_term++;
     raft_state.voted_for        = node_id;
     const request_vote_rpc_t rv = {
@@ -625,7 +619,8 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
 static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 {
     printf("[INFO] Broadcast heartbeat\n");
-    const append_entries_rpc_t ae = {0};
+    const append_entries_rpc_t ae = {.term      = raft_state.current_term,
+                                     .leader_id = node_id};
     for (int i = 0; i < NODES_COUNT; ++i) {
         if (i == node_id)
             continue;
@@ -645,28 +640,29 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 
 static void server_start(peer_t peers[NODES_COUNT])
 {
-    int server_fd = udp_listen(peers[node_id].addr, peers[node_id].port);
+    int sock_fd = udp_listen(peers[node_id].addr, peers[node_id].port);
 
     fd_set read_fds;
     unsigned char buf[BUFSIZ];
     struct sockaddr_in peer_addr;
 
-    socklen_t addr_len              = sizeof(peer_addr);
-    int max_fd                      = server_fd;
-    int num_events                  = 0;
-    time_t select_timeout_s         = HEARTBEAT_TIMEOUT_S;
-    time_t last_heartbeat_s         = 0;
-    useconds_t select_timeout_us    = RANDOM(150000, 300000);
-    struct timeval tv               = {select_timeout_s, select_timeout_us};
-
-    unsigned long long remaining_us = 0, last_update_time_us = 0;
-    time_t remaining_s = 0;
+    socklen_t addr_len             = sizeof(peer_addr);
+    int max_fd                     = sock_fd;
+    int num_events                 = 0;
+    ssize_t n                      = 0;
+    time_t select_timeout_s        = HEARTBEAT_TIMEOUT_S;
+    time_t last_heartbeat_s        = 0;
+    time_t remaining_s             = 0;
+    useconds_t select_timeout_us   = RANDOM(150000, 300000);
+    useconds_t remaining_us        = 0;
+    useconds_t last_update_time_us = 0;
+    struct timeval tv              = {select_timeout_s, select_timeout_us};
 
     while (1) {
         memset(buf, 0x00, sizeof(buf));
 
         FD_ZERO(&read_fds);
-        FD_SET(server_fd, &read_fds);
+        FD_SET(sock_fd, &read_fds);
 
         num_events = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
         if (num_events < 0) {
@@ -674,33 +670,34 @@ static void server_start(peer_t peers[NODES_COUNT])
             exit(EXIT_FAILURE);
         }
 
-        if (FD_ISSET(server_fd, &read_fds)) {
-            // TODO read data here
+        if (FD_ISSET(sock_fd, &read_fds)) {
             raft_message_t raft_message;
-            ssize_t n = recvfrom(server_fd, buf, sizeof(buf), 0,
-                                 (struct sockaddr *)&peer_addr, &addr_len);
-            (void)n;
+            n = recvfrom(sock_fd, buf, sizeof(buf), 0,
+                         (struct sockaddr *)&peer_addr, &addr_len);
+            if (n < 0)
+                fprintf(stderr, "[ERROR] recvfrom error: %s\n",
+                        strerror(errno));
             message_type_t message_type = message_read(buf, &raft_message);
             switch (message_type) {
             case MT_APPEND_ENTRIES_RQ:
                 last_update_time_us = get_microseconds_timestamp();
                 last_heartbeat_s    = get_seconds_timestamp();
-                handle_append_entries_rq(server_fd, &peer_addr,
+                handle_append_entries_rq(sock_fd, &peer_addr,
                                          &raft_message.append_entries_rpc);
                 break;
             case MT_APPEND_ENTRIES_RS:
-                handle_append_entries_rs(server_fd, &peer_addr,
+                handle_append_entries_rs(sock_fd, &peer_addr,
                                          &raft_message.append_entries_response);
                 break;
             case MT_REQUEST_VOTE_RQ:
-                handle_request_vote_rq(server_fd, &peer_addr,
+                handle_request_vote_rq(sock_fd, &peer_addr,
                                        &raft_message.request_vote_rpc);
                 break;
             case MT_REQUEST_VOTE_RS:
-                handle_request_vote_rs(server_fd, &peer_addr,
+                handle_request_vote_rs(sock_fd, &peer_addr,
                                        &raft_message.request_vote_response);
                 if (raft_state.state == RS_LEADER) {
-                    broadcast_heartbeat(server_fd, peers);
+                    broadcast_heartbeat(sock_fd, peers);
                     last_heartbeat_s  = get_seconds_timestamp();
                     select_timeout_us = 0;
                     select_timeout_s  = HEARTBEAT_TIMEOUT_S;
@@ -718,7 +715,7 @@ static void server_start(peer_t peers[NODES_COUNT])
         if (raft_state.state == RS_LEADER) {
             // We're in RS_LEADER state, sending heartbeats
             if (remaining_s >= select_timeout_s) {
-                broadcast_heartbeat(server_fd, peers);
+                broadcast_heartbeat(sock_fd, peers);
                 last_heartbeat_s = get_seconds_timestamp();
                 tv.tv_sec        = HEARTBEAT_TIMEOUT_S;
                 tv.tv_usec       = 0;
@@ -727,21 +724,20 @@ static void server_start(peer_t peers[NODES_COUNT])
                 tv.tv_usec = 0;
             }
             continue;
-        }
-
-        remaining_us = get_microseconds_timestamp() - last_update_time_us;
-        // We're in RS_CANDIDATE state, starting an election
-        if (remaining_s > select_timeout_s) {
-            printf("remaining s %ld > %ld\n", remaining_s, select_timeout_s);
-            if (remaining_us >= select_timeout_us) {
-                transition_to_candidate();
-                start_election(server_fd, peers);
-                last_update_time_us = get_microseconds_timestamp();
-                tv.tv_sec           = 0;
-                tv.tv_usec          = select_timeout_us;
-            } else {
-                tv.tv_sec  = 0;
-                tv.tv_usec = select_timeout_us - remaining_us;
+        } else {
+            remaining_us = get_microseconds_timestamp() - last_update_time_us;
+            // We're in RS_CANDIDATE state, starting an election
+            if (remaining_s > select_timeout_s) {
+                if (remaining_us >= select_timeout_us) {
+                    transition_to_candidate();
+                    start_election(sock_fd, peers);
+                    last_update_time_us = get_microseconds_timestamp();
+                    tv.tv_sec           = 0;
+                    tv.tv_usec          = select_timeout_us;
+                } else {
+                    tv.tv_sec  = 0;
+                    tv.tv_usec = select_timeout_us - remaining_us;
+                }
             }
         }
     }
