@@ -175,15 +175,15 @@ static int write_i32(uint8_t *buf, int32_t val)
 // read_i32() -- unpack a 32-bit int from a char buffer (like ntohl())
 static int32_t read_i32(const uint8_t *buf)
 {
-    uint32_t i2 = ((int32_t)buf[0] << 24) | ((int32_t)buf[1] << 16) |
-                  ((int32_t)buf[2] << 8) | buf[3];
+    uint32_t i2 = ((int64_t)buf[0] << 24) | ((int32_t)buf[1] << 16) |
+                  ((int64_t)buf[2] << 8) | buf[3];
     int32_t val;
 
     // change unsigned numbers to signed
     if (i2 <= 0x7fffffffu)
         val = i2;
     else
-        val = -1 - (int32_t)(0xffffffffu - i2);
+        val = -1 - (int64_t)(0xffffffffu - i2);
 
     return val;
 }
@@ -230,19 +230,19 @@ static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 
     // term
     bytes += write_i32(buf, rv->term);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // candidate_id
     bytes += write_i32(buf, rv->candidate_id);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // last_log_term
     bytes += write_i32(buf, rv->last_log_term);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // last_log_index
     bytes += write_i32(buf, rv->last_log_index);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     return bytes;
 }
@@ -255,7 +255,7 @@ static int request_vote_response_write(uint8_t *buf,
 
     // term
     bytes += write_i32(buf, rv->term);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     bytes += write_u8(buf++, rv->vote_granted);
 
@@ -265,16 +265,16 @@ static int request_vote_response_write(uint8_t *buf,
 static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf)
 {
     rv->term = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     rv->candidate_id = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     rv->last_log_term = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     rv->last_log_index = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     return 0;
 }
@@ -283,10 +283,15 @@ static int request_vote_response_read(request_vote_response_t *rv,
                                       const uint8_t *buf)
 {
     rv->term = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
     rv->vote_granted = read_u8(buf++);
     return 0;
 }
+
+typedef struct log_entry {
+    int term;
+    int value;
+} log_entry_t;
 
 // AppendEntrierRPC
 typedef struct append_entries_rpc {
@@ -298,7 +303,7 @@ typedef struct append_entries_rpc {
     struct {
         size_t length;
         size_t capacity;
-        int *items;
+        log_entry_t *items;
     } *entries;
 } append_entries_rpc_t;
 
@@ -314,23 +319,23 @@ static int append_entries_rpc_write(uint8_t *buf,
 
     // term
     bytes += write_i32(buf, ae->term);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // leader_id
     bytes += write_i32(buf, ae->leader_id);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // prev_log_term
     bytes += write_i32(buf, ae->prev_log_term);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // prev_log_index
     bytes += write_i32(buf, ae->prev_log_index);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     // leader_commit
     bytes += write_i32(buf, ae->leader_commit);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     if (ae->entries) {
         // entries count
@@ -339,8 +344,10 @@ static int append_entries_rpc_write(uint8_t *buf,
 
         // entries
         for (size_t i = 0; i < ae->entries->length; ++i) {
-            bytes += write_i32(buf, ae->entries->items[i]);
-            buf += sizeof(uint32_t);
+            bytes += write_i32(buf, ae->entries->items[i].term);
+            buf += sizeof(int32_t);
+            bytes += write_i32(buf, ae->entries->items[i].value);
+            buf += sizeof(int32_t);
         }
     }
 
@@ -355,7 +362,7 @@ static int append_entries_response_write(uint8_t *buf,
 
     // term
     bytes += write_i32(buf, ae->term);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     bytes += write_u8(buf++, ae->success);
 
@@ -365,26 +372,30 @@ static int append_entries_response_write(uint8_t *buf,
 static int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
 {
     ae->term = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     ae->leader_id = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     ae->prev_log_term = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     ae->prev_log_index = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     ae->leader_commit = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
 
     uint32_t entries_count = read_u32(buf);
     buf += sizeof(uint32_t);
 
     for (int i = 0; i < entries_count; ++i) {
-        da_append(ae->entries, read_i32(buf));
-        buf += sizeof(uint32_t);
+        log_entry_t entry;
+        entry.term = read_i32(buf);
+        buf += sizeof(int32_t);
+        entry.value = read_i32(buf);
+        buf += sizeof(int32_t);
+        da_append(ae->entries, entry);
     }
 
     return 0;
@@ -394,7 +405,7 @@ static int append_entries_response_read(append_entries_response_t *ae,
                                         const uint8_t *buf)
 {
     ae->term = read_i32(buf);
-    buf += sizeof(uint32_t);
+    buf += sizeof(int32_t);
     ae->success = read_u8(buf++);
     return 0;
 }
@@ -438,11 +449,6 @@ typedef enum raft_machine_state {
     RS_LEADER
 } raft_machine_state_t;
 
-typedef struct log_entry {
-    int term;
-    int value;
-} log_entry_t;
-
 typedef struct raft_state {
     raft_machine_state_t state;
     int current_term;
@@ -464,10 +470,17 @@ typedef struct raft_state {
     };
 } raft_state_t;
 
+typedef struct peer {
+    char addr[16];
+    int port;
+} peer_t;
+
 #define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 static raft_state_t raft_state = {0};
 static int votes_received      = 0;
 static int node_id             = 0;
+peer_t nodes[NODES_COUNT]      = {
+    {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
 
 static void transition_to_leader(void)
 {
@@ -491,11 +504,6 @@ static void transition_to_candidate(void)
 
     printf("[INFO] Transition to CANDIDATE\n");
 }
-
-typedef struct peer {
-    char addr[16];
-    int port;
-} peer_t;
 
 static int send_append_entries(int fd, const struct sockaddr_in *peer,
                                const append_entries_rpc_t *ae)
@@ -635,18 +643,52 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                                      const append_entries_response_t *ae)
 {
-    if (ae->term > raft_state.current_term)
+    if (ae->term > raft_state.current_term) {
         transition_to_follower(ae->term);
+        return;
+    }
+
+    // TODO get peer ID from nodes
+    int peer_id = 0;
+    // for (int i = 0; i < NODES_COUNT; ++i) {
+    //     if (strncmp(nodes[i].addr, peer->sin_addr
+    // }
+
+    if (raft_state.state == RS_LEADER && raft_state.current_term == ae->term) {
+        if (ae->success) {
+            raft_state.leader_volatile.next_index[peer_id] =
+                raft_state.log.length;
+            raft_state.leader_volatile.match_index[peer_id] =
+                raft_state.leader_volatile.next_index[peer_id] - 1;
+            // TODO finish state update
+        } else {
+            raft_state.leader_volatile.next_index[peer_id]--;
+        }
+    }
 }
 
 static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 {
     printf("[INFO] Broadcast heartbeat\n");
-    const append_entries_rpc_t ae = {.term      = raft_state.current_term,
-                                     .leader_id = node_id};
+    append_entries_rpc_t ae = {.term      = raft_state.current_term,
+                               .leader_id = node_id};
     for (int i = 0; i < NODES_COUNT; ++i) {
         if (i == node_id)
             continue;
+
+        int prev_log_index = raft_state.leader_volatile.next_index[i] - 1;
+        int prev_log_term  = prev_log_index >= 0
+                                 ? raft_state.log.items[prev_log_index].term
+                                 : -1;
+
+        ae.prev_log_index  = prev_log_index;
+        ae.prev_log_term   = prev_log_term;
+        ae.leader_commit   = raft_state.commit_index;
+
+        for (int j = raft_state.leader_volatile.next_index[i];
+             j < raft_state.log.length; ++j) {
+            da_append(ae.entries, raft_state.log.items[j]);
+        }
 
         struct sockaddr_in peer_addr = {0};
         peer_addr.sin_family         = AF_INET;
@@ -778,9 +820,6 @@ int main(int argc, char **argv)
 
     if (node_id > NODES_COUNT)
         exit(EXIT_FAILURE);
-
-    peer_t nodes[NODES_COUNT] = {
-        {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
 
     printf("[INFO] Cluster topology\n");
     for (int i = 0; i < NODES_COUNT; ++i)
