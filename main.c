@@ -46,6 +46,10 @@
 
 /**
  ** UDP network utility functions
+ **
+ ** The RAFT machine will be implemented by using UDP as the transport layer,
+ ** making it lightweight and connection-less. We're don't really care about
+ ** delivery guarantee ** and the communication is simplified.
  **/
 
 #define BACKLOG     128
@@ -111,7 +115,7 @@ static unsigned long long get_microseconds_timestamp(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
-    // Convert the time to microseconds
+    // Converts the time to microseconds
     return (unsigned long long)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
 }
 
@@ -120,12 +124,15 @@ static unsigned long long get_seconds_timestamp(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
-    // Convert the time to microseconds
+    // Returns the time in seconds
     return (unsigned long long)ts.tv_sec;
 }
 
 /**
  ** Protocol utility functions
+ **
+ ** A simple binary protocol to communicate over the wire. The RPC calls
+ ** are pretty simple and easy to serialize.
  **/
 
 static int write_u8(uint8_t *buf, uint8_t val)
@@ -183,6 +190,14 @@ static int32_t read_i32(const uint8_t *buf)
 
 /**
  ** RPC structure definition
+ **
+ ** - RequestVoteRPC     used when an election starts
+ ** - RequestVoteReply   reply to a RequestVoteRPC with the vote to elect a
+ **                      leader
+ ** - AppendEntriesRPC   Used for both heartbeats (empty, coming from the leader
+ **                      to prevent elections, and to keep the log up to date in
+ **                      the cluster)
+ ** - AppendEntriesReply reply to an AppendEntriesRPC
  **/
 
 // Generic header to identify requests
@@ -384,6 +399,8 @@ static int append_entries_response_read(append_entries_response_t *ae,
     return 0;
 }
 
+// Simple wrapper for a generic RAFT message
+
 typedef union raft_message {
     request_vote_rpc_t request_vote_rpc;
     request_vote_response_t request_vote_response;
@@ -447,8 +464,8 @@ typedef struct raft_state {
     };
 } raft_state_t;
 
+#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 static raft_state_t raft_state = {0};
-static int node_nr             = 3;
 static int votes_received      = 0;
 static int node_id             = 0;
 
@@ -586,7 +603,7 @@ static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
     } else {
         if (rv->vote_granted)
             ++votes_received;
-        if (votes_received > (node_nr / 2))
+        if (votes_received > (NODES_COUNT / 2))
             transition_to_leader();
     }
 }
@@ -663,7 +680,7 @@ static void server_start(peer_t peers[NODES_COUNT])
     time_t select_timeout_s        = HEARTBEAT_TIMEOUT_S;
     time_t last_heartbeat_s        = 0;
     time_t remaining_s             = 0;
-    useconds_t select_timeout_us   = RANDOM(150000, 300000);
+    useconds_t select_timeout_us   = ELECTION_TIMEOUT();
     useconds_t remaining_us        = 0;
     useconds_t last_update_time_us = 0;
     struct timeval tv              = {select_timeout_s, select_timeout_us};
@@ -741,7 +758,7 @@ static void server_start(peer_t peers[NODES_COUNT])
                 if (remaining_us >= select_timeout_us) {
                     transition_to_candidate();
                     start_election(sock_fd, peers);
-                    select_timeout_us   = RANDOM(150000, 300000);
+                    select_timeout_us   = ELECTION_TIMEOUT();
                     last_update_time_us = get_microseconds_timestamp();
                     tv.tv_sec           = 0;
                     tv.tv_usec          = select_timeout_us;
