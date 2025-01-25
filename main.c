@@ -550,7 +550,7 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
 static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
                                    const request_vote_rpc_t *rv)
 {
-    printf("[INFO] RequestVote [current_term=%d, voted_for=%d]\n",
+    printf("[INFO] Received RequestVoteRPC [current_term=%d, voted_for=%d]\n",
            raft_state.current_term, raft_state.voted_for);
     // - If current term > candidate term reply false
     // - If candidate id is unset (0) or it's set and the log is up to date with
@@ -576,8 +576,10 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
 static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
                                    const request_vote_response_t *rv)
 {
+    printf("[INFO] Received RequestVoteReply(term=%d, vote_granted=%d)\n",
+           rv->term, rv->vote_granted);
     // Already a leader, discard vote
-    if (raft_state.state == RS_LEADER)
+    if (raft_state.state != RS_CANDIDATE)
         return;
     if (rv->term > raft_state.current_term) {
         transition_to_follower(rv->term);
@@ -593,7 +595,9 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
                                      const append_entries_rpc_t *ae)
 {
     printf("[INFO] Received AppendEntriesRPC\n");
+
     append_entries_response_t ae_response = {0};
+
     if (ae->term > raft_state.current_term) {
         printf("[INFO] Term out of date in AppendEntriesRPC\n");
         transition_to_follower(ae->term);
@@ -605,7 +609,9 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
         }
         ae_response.success = true;
     }
+
     ae_response.term = raft_state.current_term;
+
     send_append_entries_response(fd, peer, &ae_response);
 }
 
@@ -624,6 +630,7 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
     for (int i = 0; i < NODES_COUNT; ++i) {
         if (i == node_id)
             continue;
+
         struct sockaddr_in peer_addr = {0};
         peer_addr.sin_family         = AF_INET;
         peer_addr.sin_port           = htons(peers[i].port);
@@ -632,7 +639,10 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
             perror("Invalid peer IP address");
             return;
         }
-        send_append_entries(fd, &peer_addr, &ae);
+        if (send_append_entries(fd, &peer_addr, &ae) < 0)
+            fprintf(stderr,
+                    "failed to send AppendEntriesRPC to client %s: %s\n",
+                    peers[i].addr, strerror(errno));
     }
 }
 
@@ -731,6 +741,7 @@ static void server_start(peer_t peers[NODES_COUNT])
                 if (remaining_us >= select_timeout_us) {
                     transition_to_candidate();
                     start_election(sock_fd, peers);
+                    select_timeout_us   = RANDOM(150000, 300000);
                     last_update_time_us = get_microseconds_timestamp();
                     tv.tv_sec           = 0;
                     tv.tv_usec          = select_timeout_us;
@@ -753,6 +764,10 @@ int main(int argc, char **argv)
 
     peer_t nodes[NODES_COUNT] = {
         {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
+
+    printf("[INFO] Cluster topology\n");
+    for (int i = 0; i < NODES_COUNT; ++i)
+        printf("[INFO]\t - %s:%d (%d)\n", nodes[i].addr, nodes[i].port, i);
 
     printf("[INFO] Node %d starting\n", node_id);
     srand(time(NULL));
