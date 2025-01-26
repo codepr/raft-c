@@ -21,6 +21,7 @@
 
 #define da_extend(da)                                                          \
     do {                                                                       \
+        (da)->capacity += 1;                                                   \
         (da)->capacity *= 2;                                                   \
         (da)->items =                                                          \
             realloc((da)->items, (da)->capacity * sizeof(*(da)->items));       \
@@ -33,7 +34,7 @@
 #define da_append(da, item)                                                    \
     do {                                                                       \
         assert((da));                                                          \
-        if ((da)->length + 1 == (da)->capacity)                                \
+        if ((da)->length + 1 >= (da)->capacity)                                \
             da_extend((da));                                                   \
         (da)->items[(da)->length++] = (item);                                  \
     } while (0)
@@ -141,8 +142,8 @@ uint64_t read_u64(const uint8_t *buf)
 #define NODES_COUNT 3
 
 typedef struct peer {
-    char addr[16];
-    int port;
+    struct sockaddr_in addr;
+    time_t last_active;
 } peer_t;
 
 static int set_nonblocking(int fd)
@@ -157,6 +158,21 @@ static int set_nonblocking(int fd)
         return -1;
 
     return 0;
+}
+
+static char *get_ip_str(const struct sockaddr_in *sa, char *s, size_t maxlen)
+{
+    switch (sa->sin_family) {
+    case AF_INET:
+        inet_ntop(AF_INET, &sa->sin_addr, s, maxlen);
+        break;
+
+    default:
+        strncpy(s, "Unknown AF", maxlen);
+        return NULL;
+    }
+
+    return s;
 }
 
 static int udp_listen(const char *host, int port)
@@ -323,8 +339,7 @@ typedef struct raft_state {
     };
 } raft_state_t;
 
-#define MAX_PENDING_REQUESTS 256
-#define ELECTION_TIMEOUT()   RANDOM(150000, 300000);
+#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 
 // Simple wrapper for a generic RAFT
 // message
@@ -399,7 +414,11 @@ typedef struct {
 typedef struct {
     raft_state_t machine;
     peer_t nodes[NODES_COUNT];
-    pending_request_t pending_requests[MAX_PENDING_REQUESTS];
+    struct {
+        size_t length;
+        size_t capacity;
+        pending_request_t *items;
+    } pending_requests;
     uint64_t next_request_id;
     int votes_received;
     int node_id;
@@ -434,9 +453,6 @@ static void transition_to_candidate(void)
 
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 {
-    // Message type
-    // int bytes = write_u8(buf++, MT_REQUEST_VOTE_RQ);
-
     // term
     int bytes = write_i32(buf, rv->term);
     buf += sizeof(int32_t);
@@ -459,9 +475,6 @@ static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 static int request_vote_response_write(uint8_t *buf,
                                        const request_vote_response_t *rv)
 {
-    // Message type
-    // int bytes = write_u8(buf++, MT_REQUEST_VOTE_RS);
-
     // term
     int bytes = write_i32(buf, rv->term);
     buf += sizeof(int32_t);
@@ -499,9 +512,7 @@ static int request_vote_response_read(request_vote_response_t *rv,
 
 static int append_entries_rpc_write(uint8_t *buf,
                                     const append_entries_rpc_t *ae)
-{ // Message type
-    // int bytes = write_u8(buf++, MT_APPEND_ENTRIES_RQ);
-
+{
     // term
     int bytes = write_i32(buf, ae->term);
     buf += sizeof(int32_t);
@@ -542,9 +553,6 @@ static int append_entries_rpc_write(uint8_t *buf,
 static int append_entries_response_write(uint8_t *buf,
                                          const append_entries_response_t *ae)
 {
-    // Message type
-    // int bytes = write_u8(buf++, MT_APPEND_ENTRIES_RS);
-
     // term
     int bytes = write_i32(buf, ae->term);
     buf += sizeof(int32_t);
@@ -598,8 +606,17 @@ static int append_entries_response_read(append_entries_response_t *ae,
 static int send_raft_message(int fd, const struct sockaddr_in *peer,
                              const raft_message_t *rm)
 {
-    uint8_t buf[BUFSIZ] = {0};
-    ssize_t length      = raft_message_write(&buf[0], rm);
+    uint8_t buf[BUFSIZ]                     = {0};
+
+    // Record pending request
+    const pending_request_t pending_request = {.request_id = rm->request_id,
+                                               .peer       = *peer,
+                                               .timestamp  = time(NULL),
+                                               .message    = *rm};
+
+    da_append(&cm.pending_requests, pending_request);
+
+    ssize_t length = raft_message_write(&buf[0], rm);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -629,23 +646,13 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
         if (i == cm.node_id)
             continue;
 
-        struct sockaddr_in peer_addr = {0};
-        peer_addr.sin_family         = AF_INET;
-        peer_addr.sin_port           = htons(peers[i].port);
-
-        if (inet_pton(AF_INET, peers[i].addr, &peer_addr.sin_addr) <= 0) {
-            perror("Invalid peer IP "
-                   "address");
-            return;
-        }
-
         message.request_id = cm.next_request_id++;
-        if (send_raft_message(fd, &peer_addr, &message) < 0)
+        if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
             fprintf(stderr,
                     "failed to send "
                     "RequestVoteRPC to "
-                    "client %s: %s\n",
-                    peers[i].addr, strerror(errno));
+                    "client %i: %s\n",
+                    cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
     }
 }
 
@@ -801,21 +808,12 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
                       cm.machine.log.items[j]);
         }
 
-        struct sockaddr_in peer_addr = {0};
-        peer_addr.sin_family         = AF_INET;
-        peer_addr.sin_port           = htons(peers[i].port);
-
-        if (inet_pton(AF_INET, peers[i].addr, &peer_addr.sin_addr) <= 0) {
-            perror("Invalid peer IP "
-                   "address");
-            return;
-        }
-        if (send_raft_message(fd, &peer_addr, &message) < 0)
+        if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
             fprintf(stderr,
                     "failed to send "
                     "AppendEntriesRPC to "
-                    "client %s: %s\n",
-                    peers[i].addr, strerror(errno));
+                    "client %i: %s\n",
+                    cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
     }
 }
 
@@ -823,7 +821,11 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 
 static void server_start(peer_t peers[NODES_COUNT])
 {
-    int sock_fd = udp_listen(peers[cm.node_id].addr, peers[cm.node_id].port);
+    char ip[16];
+    get_ip_str(&peers[cm.node_id].addr, ip, 16);
+    printf("[INFO] UDP listen on %s:%d\n", ip,
+           htons(peers[cm.node_id].addr.sin_port));
+    int sock_fd = udp_listen(ip, htons(peers[cm.node_id].addr.sin_port));
 
     fd_set read_fds;
     unsigned char buf[BUFSIZ];
@@ -932,22 +934,39 @@ static void server_start(peer_t peers[NODES_COUNT])
     }
 }
 
+static void init_nodes(void)
+{
+    struct {
+        char addr[16];
+        int port;
+    } peers[NODES_COUNT] = {
+        {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
+
+    for (int i = 0; i < NODES_COUNT; ++i) {
+        printf("[INFO] Cluster topology\n");
+        printf("[INFO]\t - %s:%d (%d)\n", peers[i].addr, peers[i].port, i);
+
+        struct sockaddr_in s_addr = {0};
+        s_addr.sin_family         = AF_INET;
+        s_addr.sin_port           = htons(peers[i].port);
+
+        if (inet_pton(AF_INET, peers[i].addr, &s_addr.sin_addr) <= 0) {
+            perror("Invalid peer IP address");
+            return;
+        }
+        cm.nodes[i] = (peer_t){.addr = s_addr, .last_active = time(NULL)};
+    }
+}
+
 int main(int argc, char **argv)
 {
-    cm.nodes[0] = (peer_t){"127.0.0.1", 8777};
-    cm.nodes[1] = (peer_t){"127.0.0.1", 8778};
-    cm.nodes[2] = (peer_t){"127.0.0.1", 8779};
+    init_nodes();
 
     if (argc > 1)
         cm.node_id = atoi(argv[1]);
 
     if (cm.node_id > NODES_COUNT)
         exit(EXIT_FAILURE);
-
-    printf("[INFO] Cluster topology\n");
-    for (int i = 0; i < NODES_COUNT; ++i)
-        printf("[INFO]\t - %s:%d (%d)\n", cm.nodes[i].addr, cm.nodes[i].port,
-               i);
 
     printf("[INFO] Node %d starting\n", cm.node_id);
     srand(time(NULL));
