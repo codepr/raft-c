@@ -13,7 +13,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define RANDOM(a, b) rand() % ((b) + 1 - (a)) + (a)
+#define RANDOM(a, b)       rand() % ((b) + 1 - (a)) + (a)
+#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 
 /**
  ** Dynamic array utility macros
@@ -138,7 +139,6 @@ uint64_t read_u64(const uint8_t *buf)
  **/
 
 #define BACKLOG     128
-#define MAX_NODES   15
 #define NODES_COUNT 3
 
 typedef struct peer {
@@ -263,20 +263,10 @@ typedef struct request_vote_rpc {
     int last_log_index;
 } request_vote_rpc_t;
 
-typedef struct request_vote_response {
+typedef struct request_vote_reply {
     int term;
     bool vote_granted;
-} request_vote_response_t;
-
-/**
- ** Raft machine State
- **/
-
-typedef enum raft_machine_state {
-    RS_FOLLOWER,
-    RS_CANDIDATE,
-    RS_LEADER
-} raft_machine_state_t;
+} request_vote_reply_t;
 
 typedef struct log_entry {
     int term;
@@ -297,26 +287,36 @@ typedef struct append_entries_rpc {
     } *entries;
 } append_entries_rpc_t;
 
-typedef struct append_entries_response {
+typedef struct append_entries_reply {
     int term;
     bool success;
-} append_entries_response_t;
+} append_entries_reply_t;
 
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv);
-static int request_vote_response_write(uint8_t *buf,
-                                       const request_vote_response_t *rv);
+static int request_vote_reply_write(uint8_t *buf,
+                                    const request_vote_reply_t *rv);
 static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf);
-static int request_vote_response_read(request_vote_response_t *rv,
-                                      const uint8_t *buf);
+static int request_vote_reply_read(request_vote_reply_t *rv,
+                                   const uint8_t *buf);
 static int append_entries_rpc_write(uint8_t *buf,
                                     const append_entries_rpc_t *ae);
-static int append_entries_response_write(uint8_t *buf,
-                                         const append_entries_response_t *ae);
+static int append_entries_reply_write(uint8_t *buf,
+                                      const append_entries_reply_t *ae);
 static int append_entries_rpc_read(append_entries_rpc_t *ae,
                                    const uint8_t *buf);
-static int append_entries_response_read(append_entries_response_t *ae,
-                                        const uint8_t *buf);
+static int append_entries_reply_read(append_entries_reply_t *ae,
+                                     const uint8_t *buf);
 static void start_election(int fd, peer_t peers[NODES_COUNT]);
+
+/**
+ ** Raft machine State
+ **/
+
+typedef enum raft_machine_state {
+    RS_FOLLOWER,
+    RS_CANDIDATE,
+    RS_LEADER
+} raft_machine_state_t;
 
 typedef struct raft_state {
     raft_machine_state_t state;
@@ -333,13 +333,11 @@ typedef struct raft_state {
             int last_applied;
         } volatile;
         struct {
-            int next_index[MAX_NODES];
-            int match_index[MAX_NODES];
+            int next_index[NODES_COUNT];
+            int match_index[NODES_COUNT];
         } leader_volatile;
     };
 } raft_state_t;
-
-#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 
 // Simple wrapper for a generic RAFT
 // message
@@ -349,14 +347,11 @@ typedef struct raft_message {
     message_type_t type;
     union {
         request_vote_rpc_t request_vote_rpc;
-        request_vote_response_t request_vote_response;
+        request_vote_reply_t request_vote_reply;
         append_entries_rpc_t append_entries_rpc;
-        append_entries_response_t append_entries_response;
+        append_entries_reply_t append_entries_reply;
     };
 } raft_message_t;
-
-static int send_raft_message(int fd, const struct sockaddr_in *peer,
-                             const raft_message_t *rm);
 
 static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
 {
@@ -368,14 +363,13 @@ static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
         bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
         break;
     case MT_APPEND_ENTRIES_RS:
-        bytes +=
-            append_entries_response_write(buf, &rm->append_entries_response);
+        bytes += append_entries_reply_write(buf, &rm->append_entries_reply);
         break;
     case MT_REQUEST_VOTE_RQ:
         bytes += request_vote_rpc_write(buf, &rm->request_vote_rpc);
         break;
     case MT_REQUEST_VOTE_RS:
-        bytes += request_vote_response_write(buf, &rm->request_vote_response);
+        bytes += request_vote_reply_write(buf, &rm->request_vote_reply);
         break;
     }
 
@@ -392,13 +386,13 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
         append_entries_rpc_read(&rm->append_entries_rpc, buf);
         break;
     case MT_APPEND_ENTRIES_RS:
-        append_entries_response_read(&rm->append_entries_response, buf);
+        append_entries_reply_read(&rm->append_entries_reply, buf);
         break;
     case MT_REQUEST_VOTE_RQ:
         request_vote_rpc_read(&rm->request_vote_rpc, buf);
         break;
     case MT_REQUEST_VOTE_RS:
-        request_vote_response_read(&rm->request_vote_response, buf);
+        request_vote_reply_read(&rm->request_vote_reply, buf);
         break;
     }
     return rm->type;
@@ -439,16 +433,14 @@ static void transition_to_follower(int term)
     cm.machine.voted_for    = -1;
     cm.machine.current_term = term;
 
-    printf("[INFO] Transition to "
-           "FOLLOWER\n");
+    printf("[INFO] Transition to FOLLOWER\n");
 }
 
 static void transition_to_candidate(void)
 {
     cm.machine.state = RS_CANDIDATE;
 
-    printf("[INFO] Transition to "
-           "CANDIDATE\n");
+    printf("[INFO] Transition to CANDIDATE\n");
 }
 
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
@@ -472,8 +464,8 @@ static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
     return bytes;
 }
 
-static int request_vote_response_write(uint8_t *buf,
-                                       const request_vote_response_t *rv)
+static int request_vote_reply_write(uint8_t *buf,
+                                    const request_vote_reply_t *rv)
 {
     // term
     int bytes = write_i32(buf, rv->term);
@@ -501,8 +493,7 @@ static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf)
     return 0;
 }
 
-static int request_vote_response_read(request_vote_response_t *rv,
-                                      const uint8_t *buf)
+static int request_vote_reply_read(request_vote_reply_t *rv, const uint8_t *buf)
 {
     rv->term = read_i32(buf);
     buf += sizeof(int32_t);
@@ -550,8 +541,8 @@ static int append_entries_rpc_write(uint8_t *buf,
     return bytes;
 }
 
-static int append_entries_response_write(uint8_t *buf,
-                                         const append_entries_response_t *ae)
+static int append_entries_reply_write(uint8_t *buf,
+                                      const append_entries_reply_t *ae)
 {
     // term
     int bytes = write_i32(buf, ae->term);
@@ -594,8 +585,8 @@ static int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
     return 0;
 }
 
-static int append_entries_response_read(append_entries_response_t *ae,
-                                        const uint8_t *buf)
+static int append_entries_reply_read(append_entries_reply_t *ae,
+                                     const uint8_t *buf)
 {
     ae->term = read_i32(buf);
     buf += sizeof(int32_t);
@@ -625,9 +616,7 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
     if (cm.machine.state != RS_CANDIDATE)
         return;
 
-    printf("[INFO] Start election "
-           "current_term=%d\n",
-           cm.machine.current_term);
+    printf("[INFO] Start election current_term=%d\n", cm.machine.current_term);
     cm.votes_received = 1;
     cm.machine.current_term++;
     cm.machine.voted_for   = cm.node_id;
@@ -648,10 +637,7 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
 
         message.request_id = cm.next_request_id++;
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
-            fprintf(stderr,
-                    "failed to send "
-                    "RequestVoteRPC to "
-                    "client %i: %s\n",
+            fprintf(stderr, "failed to send RequestVoteRPC to client %i: %s\n",
                     cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
     }
 }
@@ -659,9 +645,7 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
 static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
                                    const request_vote_rpc_t *rv)
 {
-    printf("[INFO] Received RequestVoteRPC "
-           "[current_term=%d, "
-           "voted_for=%d]\n",
+    printf("[INFO] Received RequestVoteRPC [current_term=%d, voted_for=%d]\n",
            cm.machine.current_term, cm.machine.voted_for);
     // - If current term > candidate term
     // reply false
@@ -670,11 +654,10 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
     // with
     //   the state, reply true
     if (rv->term > cm.machine.current_term) {
-        printf("[INFO] Term out of date "
-               "in RequestVote\n");
+        printf("[INFO] Term out of date in RequestVote\n");
         transition_to_follower(rv->term);
     }
-    request_vote_response_t rv_response = {0};
+    request_vote_reply_t rv_response = {0};
     if (cm.machine.current_term == rv->term &&
         (cm.machine.voted_for == -1 ||
          cm.machine.voted_for == rv->candidate_id)) {
@@ -686,23 +669,18 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
     }
     rv_response.term             = cm.machine.current_term;
 
-    const raft_message_t message = {.type       = MT_REQUEST_VOTE_RS,
-                                    .request_id = cm.next_request_id++,
-                                    .request_vote_response = rv_response};
+    const raft_message_t message = {.type               = MT_REQUEST_VOTE_RS,
+                                    .request_id         = cm.next_request_id++,
+                                    .request_vote_reply = rv_response};
     if (send_raft_message(fd, peer, &message) < 0)
-        fprintf(stderr,
-                "failed to send "
-                "RequestVoteReply to "
-                "client %d: %s\n",
+        fprintf(stderr, "failed to send RequestVoteReply to client %d: %s\n",
                 peer->sin_addr.s_addr, strerror(errno));
 }
 
 static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
-                                   const request_vote_response_t *rv)
+                                   const request_vote_reply_t *rv)
 {
-    printf("[INFO] Received "
-           "RequestVoteReply(term=%d, "
-           "vote_granted=%d)\n",
+    printf("[INFO] Received RequestVoteReply(term=%d, vote_granted=%d)\n",
            rv->term, rv->vote_granted);
     // Already a leader, discard vote
     if (cm.machine.state != RS_CANDIDATE)
@@ -720,14 +698,12 @@ static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
 static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
                                      const append_entries_rpc_t *ae)
 {
-    printf("[INFO] Received "
-           "AppendEntriesRPC\n");
+    printf("[INFO] Received AppendEntriesRPC\n");
 
-    append_entries_response_t ae_response = {0};
+    append_entries_reply_t ae_response = {0};
 
     if (ae->term > cm.machine.current_term) {
-        printf("[INFO] Term out of date "
-               "in AppendEntriesRPC\n");
+        printf("[INFO] Term out of date in AppendEntriesRPC\n");
         transition_to_follower(ae->term);
     }
 
@@ -742,18 +718,26 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 
     const raft_message_t message = {.type       = MT_APPEND_ENTRIES_RS,
                                     .request_id = cm.next_request_id++,
-                                    .append_entries_response = ae_response};
+                                    .append_entries_reply = ae_response};
 
     if (send_raft_message(fd, peer, &message) < 0)
-        fprintf(stderr,
-                "failed to send "
-                "AppendEntriesReply to "
-                "client %d: %s\n",
+        fprintf(stderr, "failed to send AppendEntriesReply to client %d: %s\n",
                 peer->sin_addr.s_addr, strerror(errno));
 }
 
+int find_peer_index(const struct sockaddr_in *peer)
+{
+    for (int i = 0; i < NODES_COUNT; ++i) {
+        if (cm.nodes[i].addr.sin_addr.s_addr == peer->sin_addr.s_addr &&
+            htons(cm.nodes[i].addr.sin_port) == htons(peer->sin_port)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
-                                     const append_entries_response_t *ae)
+                                     const append_entries_reply_t *ae)
 {
     if (ae->term > cm.machine.current_term) {
         transition_to_follower(ae->term);
@@ -761,12 +745,11 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
     }
 
     // TODO get peer ID from nodes
-    int peer_id = 0;
-    // for (int i = 0; i < NODES_COUNT;
-    // ++i) {
-    //     if (strncmp(nodes[i].addr,
-    //     peer->sin_addr
-    // }
+    int peer_id = find_peer_index(peer);
+    if (peer_id < 0) {
+        printf("[ERROR] Could not find peer ID for response\n");
+        return;
+    }
 
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
@@ -774,7 +757,24 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                 cm.machine.log.length;
             cm.machine.leader_volatile.match_index[peer_id] =
                 cm.machine.leader_volatile.next_index[peer_id] - 1;
-            // TODO finish state update
+
+            int current_commit_index = cm.machine.commit_index;
+            for (int i = cm.machine.commit_index + 1; i < cm.machine.log.length;
+                 ++i) {
+                if (cm.machine.log.items[i].term == cm.machine.current_term) {
+                    int match_count = 1;
+                    for (int j = 0; j < NODES_COUNT; ++j) {
+                        if (cm.machine.leader_volatile.match_index[i] >= i)
+                            match_count++;
+                    }
+                    if (match_count * 2 > NODES_COUNT + 1)
+                        cm.machine.commit_index = i;
+                }
+            }
+            if (cm.machine.commit_index != current_commit_index) {
+                printf("[INFO] Leader sets commit_index=%d\n",
+                       cm.machine.commit_index);
+            }
         } else {
             cm.machine.leader_volatile.next_index[peer_id]--;
         }
@@ -810,9 +810,7 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
             fprintf(stderr,
-                    "failed to send "
-                    "AppendEntriesRPC to "
-                    "client %i: %s\n",
+                    "failed to send AppendEntriesRPC to client %i: %s\n",
                     cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
     }
 }
@@ -860,9 +858,7 @@ static void server_start(peer_t peers[NODES_COUNT])
             n = recvfrom(sock_fd, buf, sizeof(buf), 0,
                          (struct sockaddr *)&peer_addr, &addr_len);
             if (n < 0)
-                fprintf(stderr,
-                        "[ERROR] recvfrom "
-                        "error: %s\n",
+                fprintf(stderr, "[ERROR] recvfrom error: %s\n",
                         strerror(errno));
             message_type_t message_type = raft_message_read(buf, &raft_message);
             switch (message_type) {
@@ -874,7 +870,7 @@ static void server_start(peer_t peers[NODES_COUNT])
                 break;
             case MT_APPEND_ENTRIES_RS:
                 handle_append_entries_rs(sock_fd, &peer_addr,
-                                         &raft_message.append_entries_response);
+                                         &raft_message.append_entries_reply);
                 break;
             case MT_REQUEST_VOTE_RQ:
                 handle_request_vote_rq(sock_fd, &peer_addr,
@@ -882,7 +878,7 @@ static void server_start(peer_t peers[NODES_COUNT])
                 break;
             case MT_REQUEST_VOTE_RS:
                 handle_request_vote_rs(sock_fd, &peer_addr,
-                                       &raft_message.request_vote_response);
+                                       &raft_message.request_vote_reply);
                 if (cm.machine.state == RS_LEADER) {
                     broadcast_heartbeat(sock_fd, peers);
                     last_heartbeat_s  = get_seconds_timestamp();
