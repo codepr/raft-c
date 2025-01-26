@@ -45,7 +45,67 @@
     } while (0)
 
 /**
- ** UDP network utility functions
+ ** Binary protocol utility functions
+ **
+ ** A simple binary protocol to communicate over the wire. The RPC calls
+ ** are pretty simple and easy to serialize.
+ **/
+
+static int write_u8(uint8_t *buf, uint8_t val)
+{
+    *buf++ = val;
+    return sizeof(uint8_t);
+}
+
+static uint8_t read_u8(const uint8_t *const buf) { return ((uint8_t)*buf); }
+
+// write_u32() -- store a 32-bit int into a char buffer (like htonl())
+static int write_u32(uint8_t *buf, uint32_t val)
+{
+    *buf++ = val >> 24;
+    *buf++ = val >> 16;
+    *buf++ = val >> 8;
+    *buf++ = val;
+
+    return sizeof(uint32_t);
+}
+
+// read_u32() -- unpack a 32-bit unsigned from a char buffer (like ntohl())
+static uint32_t read_u32(const uint8_t *const buf)
+{
+    return ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+           ((uint32_t)buf[2] << 8) | buf[3];
+}
+
+// write_i32() -- store a 32-bit int into a char buffer (like htonl())
+static int write_i32(uint8_t *buf, int32_t val)
+{
+    *buf++ = val >> 24;
+    *buf++ = val >> 16;
+    *buf++ = val >> 8;
+    *buf++ = val;
+
+    return sizeof(int32_t);
+}
+
+// read_i32() -- unpack a 32-bit int from a char buffer (like ntohl())
+static int32_t read_i32(const uint8_t *buf)
+{
+    uint32_t i2 = ((int64_t)buf[0] << 24) | ((int32_t)buf[1] << 16) |
+                  ((int64_t)buf[2] << 8) | buf[3];
+    int32_t val;
+
+    // change unsigned numbers to signed
+    if (i2 <= 0x7fffffffu)
+        val = i2;
+    else
+        val = -1 - (int64_t)(0xffffffffu - i2);
+
+    return val;
+}
+
+/**
+ ** Cluster communication and management - UDP network utility functions
  **
  ** The RAFT machine will be implemented by using UDP as the transport layer,
  ** making it lightweight and connection-less. We're don't really care about
@@ -55,6 +115,11 @@
 #define BACKLOG     128
 #define MAX_NODES   15
 #define NODES_COUNT 3
+
+typedef struct peer {
+    char addr[16];
+    int port;
+} peer_t;
 
 static int set_nonblocking(int fd)
 {
@@ -129,66 +194,6 @@ static unsigned long long get_seconds_timestamp(void)
 }
 
 /**
- ** Protocol utility functions
- **
- ** A simple binary protocol to communicate over the wire. The RPC calls
- ** are pretty simple and easy to serialize.
- **/
-
-static int write_u8(uint8_t *buf, uint8_t val)
-{
-    *buf++ = val;
-    return sizeof(uint8_t);
-}
-
-static uint8_t read_u8(const uint8_t *const buf) { return ((uint8_t)*buf); }
-
-// write_u32() -- store a 32-bit int into a char buffer (like htonl())
-static int write_u32(uint8_t *buf, uint32_t val)
-{
-    *buf++ = val >> 24;
-    *buf++ = val >> 16;
-    *buf++ = val >> 8;
-    *buf++ = val;
-
-    return sizeof(uint32_t);
-}
-
-// read_u32() -- unpack a 32-bit unsigned from a char buffer (like ntohl())
-static uint32_t read_u32(const uint8_t *const buf)
-{
-    return ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
-           ((uint32_t)buf[2] << 8) | buf[3];
-}
-
-// write_i32() -- store a 32-bit int into a char buffer (like htonl())
-static int write_i32(uint8_t *buf, int32_t val)
-{
-    *buf++ = val >> 24;
-    *buf++ = val >> 16;
-    *buf++ = val >> 8;
-    *buf++ = val;
-
-    return sizeof(int32_t);
-}
-
-// read_i32() -- unpack a 32-bit int from a char buffer (like ntohl())
-static int32_t read_i32(const uint8_t *buf)
-{
-    uint32_t i2 = ((int64_t)buf[0] << 24) | ((int32_t)buf[1] << 16) |
-                  ((int64_t)buf[2] << 8) | buf[3];
-    int32_t val;
-
-    // change unsigned numbers to signed
-    if (i2 <= 0x7fffffffu)
-        val = i2;
-    else
-        val = -1 - (int64_t)(0xffffffffu - i2);
-
-    return val;
-}
-
-/**
  ** RPC structure definition
  **
  ** - RequestVoteRPC     used when an election starts
@@ -222,6 +227,157 @@ typedef struct request_vote_response {
     int term;
     bool vote_granted;
 } request_vote_response_t;
+
+/**
+ ** Raft machine State
+ **/
+
+typedef enum raft_machine_state {
+    RS_FOLLOWER,
+    RS_CANDIDATE,
+    RS_LEADER
+} raft_machine_state_t;
+
+typedef struct log_entry {
+    int term;
+    int value;
+} log_entry_t;
+
+// AppendEntrierRPC
+typedef struct append_entries_rpc {
+    int term;
+    int leader_id;
+    int prev_log_term;
+    int prev_log_index;
+    int leader_commit;
+    struct {
+        size_t length;
+        size_t capacity;
+        log_entry_t *items;
+    } *entries;
+} append_entries_rpc_t;
+
+typedef struct append_entries_response {
+    int term;
+    bool success;
+} append_entries_response_t;
+
+static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv);
+static int request_vote_response_write(uint8_t *buf,
+                                       const request_vote_response_t *rv);
+static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf);
+static int request_vote_response_read(request_vote_response_t *rv,
+                                      const uint8_t *buf);
+static int append_entries_rpc_write(uint8_t *buf,
+                                    const append_entries_rpc_t *ae);
+static int append_entries_response_write(uint8_t *buf,
+                                         const append_entries_response_t *ae);
+static int append_entries_rpc_read(append_entries_rpc_t *ae,
+                                   const uint8_t *buf);
+static int append_entries_response_read(append_entries_response_t *ae,
+                                        const uint8_t *buf);
+static int send_append_entries(int fd, const struct sockaddr_in *peer,
+                               const append_entries_rpc_t *ae);
+static int send_append_entries_response(int fd, const struct sockaddr_in *peer,
+                                        const append_entries_response_t *ae);
+static int send_request_vote(int fd, const struct sockaddr_in *peer,
+                             const request_vote_rpc_t *rv);
+static int send_request_vote_response(int fd, const struct sockaddr_in *peer,
+                                      const request_vote_response_t *rv);
+static void start_election(int fd, peer_t peers[NODES_COUNT]);
+
+typedef struct raft_state {
+    raft_machine_state_t state;
+    int current_term;
+    int voted_for;
+    struct {
+        size_t length;
+        size_t capacity;
+        log_entry_t *items;
+    } log;
+    union {
+        struct {
+            int commit_index;
+            int last_applied;
+        } volatile;
+        struct {
+            int next_index[MAX_NODES];
+            int match_index[MAX_NODES];
+        } leader_volatile;
+    };
+} raft_state_t;
+
+#define MAX_PENDING_REQUESTS 256
+#define ELECTION_TIMEOUT()   RANDOM(150000, 300000);
+
+// Simple wrapper for a generic RAFT message
+
+typedef union raft_message {
+    request_vote_rpc_t request_vote_rpc;
+    request_vote_response_t request_vote_response;
+    append_entries_rpc_t append_entries_rpc;
+    append_entries_response_t append_entries_response;
+} raft_message_t;
+
+static message_type_t message_read(const uint8_t *buf, raft_message_t *rm)
+{
+    message_type_t message_type = read_u8(buf++);
+    switch (message_type) {
+    case MT_APPEND_ENTRIES_RQ:
+        append_entries_rpc_read(&rm->append_entries_rpc, buf);
+        break;
+    case MT_APPEND_ENTRIES_RS:
+        append_entries_response_read(&rm->append_entries_response, buf);
+        break;
+    case MT_REQUEST_VOTE_RQ:
+        request_vote_rpc_read(&rm->request_vote_rpc, buf);
+        break;
+    case MT_REQUEST_VOTE_RS:
+        request_vote_response_read(&rm->request_vote_response, buf);
+        break;
+    }
+    return message_type;
+}
+
+typedef struct {
+    uint64_t request_id;
+    struct sockaddr_in peer;
+    time_t timestamp;
+    raft_message_t message;
+} pending_request_t;
+
+typedef struct {
+    raft_state_t machine;
+    pending_request_t pending_requests[MAX_PENDING_REQUESTS];
+    int votes_received;
+    int node_id;
+    peer_t nodes[NODES_COUNT];
+} consensus_module_t;
+
+static consensus_module_t cm = {0};
+
+static void transition_to_leader(void)
+{
+    cm.machine.state  = RS_LEADER;
+    cm.votes_received = 0;
+    printf("[INFO] Transition to LEADER\n");
+}
+
+static void transition_to_follower(int term)
+{
+    cm.machine.state        = RS_FOLLOWER;
+    cm.machine.voted_for    = -1;
+    cm.machine.current_term = term;
+
+    printf("[INFO] Transition to FOLLOWER\n");
+}
+
+static void transition_to_candidate(void)
+{
+    cm.machine.state = RS_CANDIDATE;
+
+    printf("[INFO] Transition to CANDIDATE\n");
+}
 
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 {
@@ -287,30 +443,6 @@ static int request_vote_response_read(request_vote_response_t *rv,
     rv->vote_granted = read_u8(buf++);
     return 0;
 }
-
-typedef struct log_entry {
-    int term;
-    int value;
-} log_entry_t;
-
-// AppendEntrierRPC
-typedef struct append_entries_rpc {
-    int term;
-    int leader_id;
-    int prev_log_term;
-    int prev_log_index;
-    int leader_commit;
-    struct {
-        size_t length;
-        size_t capacity;
-        log_entry_t *items;
-    } *entries;
-} append_entries_rpc_t;
-
-typedef struct append_entries_response {
-    int term;
-    bool success;
-} append_entries_response_t;
 
 static int append_entries_rpc_write(uint8_t *buf,
                                     const append_entries_rpc_t *ae)
@@ -410,101 +542,6 @@ static int append_entries_response_read(append_entries_response_t *ae,
     return 0;
 }
 
-// Simple wrapper for a generic RAFT message
-
-typedef union raft_message {
-    request_vote_rpc_t request_vote_rpc;
-    request_vote_response_t request_vote_response;
-    append_entries_rpc_t append_entries_rpc;
-    append_entries_response_t append_entries_response;
-} raft_message_t;
-
-static message_type_t message_read(const uint8_t *buf, raft_message_t *rm)
-{
-    message_type_t message_type = read_u8(buf++);
-    switch (message_type) {
-    case MT_APPEND_ENTRIES_RQ:
-        append_entries_rpc_read(&rm->append_entries_rpc, buf);
-        break;
-    case MT_APPEND_ENTRIES_RS:
-        append_entries_response_read(&rm->append_entries_response, buf);
-        break;
-    case MT_REQUEST_VOTE_RQ:
-        request_vote_rpc_read(&rm->request_vote_rpc, buf);
-        break;
-    case MT_REQUEST_VOTE_RS:
-        request_vote_response_read(&rm->request_vote_response, buf);
-        break;
-    }
-    return message_type;
-}
-
-/**
- ** Raft machine State
- **/
-
-typedef enum raft_machine_state {
-    RS_FOLLOWER,
-    RS_CANDIDATE,
-    RS_LEADER
-} raft_machine_state_t;
-
-typedef struct raft_state {
-    raft_machine_state_t state;
-    int current_term;
-    int voted_for;
-    struct {
-        size_t length;
-        size_t capacity;
-        log_entry_t *items;
-    } log;
-    union {
-        struct {
-            int commit_index;
-            int last_applied;
-        } volatile;
-        struct {
-            int next_index[MAX_NODES];
-            int match_index[MAX_NODES];
-        } leader_volatile;
-    };
-} raft_state_t;
-
-typedef struct peer {
-    char addr[16];
-    int port;
-} peer_t;
-
-#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
-static raft_state_t raft_state = {0};
-static int votes_received      = 0;
-static int node_id             = 0;
-peer_t nodes[NODES_COUNT]      = {
-    {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
-
-static void transition_to_leader(void)
-{
-    raft_state.state = RS_LEADER;
-    votes_received   = 0;
-    printf("[INFO] Transition to LEADER\n");
-}
-
-static void transition_to_follower(int term)
-{
-    raft_state.state        = RS_FOLLOWER;
-    raft_state.voted_for    = -1;
-    raft_state.current_term = term;
-
-    printf("[INFO] Transition to FOLLOWER\n");
-}
-
-static void transition_to_candidate(void)
-{
-    raft_state.state = RS_CANDIDATE;
-
-    printf("[INFO] Transition to CANDIDATE\n");
-}
-
 static int send_append_entries(int fd, const struct sockaddr_in *peer,
                                const append_entries_rpc_t *ae)
 {
@@ -539,23 +576,23 @@ static int send_request_vote_response(int fd, const struct sockaddr_in *peer,
 
 static void start_election(int fd, peer_t peers[NODES_COUNT])
 {
-    if (raft_state.state != RS_CANDIDATE)
+    if (cm.machine.state != RS_CANDIDATE)
         return;
 
-    printf("[INFO] Start election current_term=%d\n", raft_state.current_term);
-    votes_received = 1;
-    raft_state.current_term++;
-    raft_state.voted_for        = node_id;
+    printf("[INFO] Start election current_term=%d\n", cm.machine.current_term);
+    cm.votes_received = 1;
+    cm.machine.current_term++;
+    cm.machine.voted_for        = cm.node_id;
     const request_vote_rpc_t rv = {
-        .term         = raft_state.current_term,
-        .candidate_id = node_id,
+        .term         = cm.machine.current_term,
+        .candidate_id = cm.node_id,
         .last_log_term =
-            raft_state.log.length == 0
+            cm.machine.log.length == 0
                 ? 0
-                : raft_state.log.items[raft_state.log.length - 1].term,
-        .last_log_index = raft_state.log.length};
+                : cm.machine.log.items[cm.machine.log.length - 1].term,
+        .last_log_index = cm.machine.log.length};
     for (int i = 0; i < NODES_COUNT; ++i) {
-        if (i == node_id)
+        if (i == cm.node_id)
             continue;
 
         struct sockaddr_in peer_addr = {0};
@@ -576,25 +613,25 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
                                    const request_vote_rpc_t *rv)
 {
     printf("[INFO] Received RequestVoteRPC [current_term=%d, voted_for=%d]\n",
-           raft_state.current_term, raft_state.voted_for);
+           cm.machine.current_term, cm.machine.voted_for);
     // - If current term > candidate term reply false
     // - If candidate id is unset (0) or it's set and the log is up to date with
     //   the state, reply true
-    if (rv->term > raft_state.current_term) {
+    if (rv->term > cm.machine.current_term) {
         printf("[INFO] Term out of date in RequestVote\n");
         transition_to_follower(rv->term);
     }
     request_vote_response_t rv_response = {0};
-    if (raft_state.current_term == rv->term &&
-        (raft_state.voted_for == -1 ||
-         raft_state.voted_for == rv->candidate_id)) {
+    if (cm.machine.current_term == rv->term &&
+        (cm.machine.voted_for == -1 ||
+         cm.machine.voted_for == rv->candidate_id)) {
         rv_response.vote_granted = true;
-        raft_state.voted_for     = rv->candidate_id;
+        cm.machine.voted_for     = rv->candidate_id;
 
     } else {
         rv_response.vote_granted = false;
     }
-    rv_response.term = raft_state.current_term;
+    rv_response.term = cm.machine.current_term;
     send_request_vote_response(fd, peer, &rv_response);
 }
 
@@ -604,14 +641,14 @@ static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
     printf("[INFO] Received RequestVoteReply(term=%d, vote_granted=%d)\n",
            rv->term, rv->vote_granted);
     // Already a leader, discard vote
-    if (raft_state.state != RS_CANDIDATE)
+    if (cm.machine.state != RS_CANDIDATE)
         return;
-    if (rv->term > raft_state.current_term) {
+    if (rv->term > cm.machine.current_term) {
         transition_to_follower(rv->term);
     } else {
         if (rv->vote_granted)
-            ++votes_received;
-        if (votes_received > (NODES_COUNT / 2))
+            ++cm.votes_received;
+        if (cm.votes_received > (NODES_COUNT / 2))
             transition_to_leader();
     }
 }
@@ -623,19 +660,19 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 
     append_entries_response_t ae_response = {0};
 
-    if (ae->term > raft_state.current_term) {
+    if (ae->term > cm.machine.current_term) {
         printf("[INFO] Term out of date in AppendEntriesRPC\n");
         transition_to_follower(ae->term);
     }
 
-    if (ae->term == raft_state.current_term) {
-        if (raft_state.state != RS_FOLLOWER) {
+    if (ae->term == cm.machine.current_term) {
+        if (cm.machine.state != RS_FOLLOWER) {
             transition_to_follower(ae->term);
         }
         ae_response.success = true;
     }
 
-    ae_response.term = raft_state.current_term;
+    ae_response.term = cm.machine.current_term;
 
     send_append_entries_response(fd, peer, &ae_response);
 }
@@ -643,7 +680,7 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                                      const append_entries_response_t *ae)
 {
-    if (ae->term > raft_state.current_term) {
+    if (ae->term > cm.machine.current_term) {
         transition_to_follower(ae->term);
         return;
     }
@@ -654,15 +691,15 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
     //     if (strncmp(nodes[i].addr, peer->sin_addr
     // }
 
-    if (raft_state.state == RS_LEADER && raft_state.current_term == ae->term) {
+    if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
-            raft_state.leader_volatile.next_index[peer_id] =
-                raft_state.log.length;
-            raft_state.leader_volatile.match_index[peer_id] =
-                raft_state.leader_volatile.next_index[peer_id] - 1;
+            cm.machine.leader_volatile.next_index[peer_id] =
+                cm.machine.log.length;
+            cm.machine.leader_volatile.match_index[peer_id] =
+                cm.machine.leader_volatile.next_index[peer_id] - 1;
             // TODO finish state update
         } else {
-            raft_state.leader_volatile.next_index[peer_id]--;
+            cm.machine.leader_volatile.next_index[peer_id]--;
         }
     }
 }
@@ -670,24 +707,24 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
 static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 {
     printf("[INFO] Broadcast heartbeat\n");
-    append_entries_rpc_t ae = {.term      = raft_state.current_term,
-                               .leader_id = node_id};
+    append_entries_rpc_t ae = {.term      = cm.machine.current_term,
+                               .leader_id = cm.node_id};
     for (int i = 0; i < NODES_COUNT; ++i) {
-        if (i == node_id)
+        if (i == cm.node_id)
             continue;
 
-        int prev_log_index = raft_state.leader_volatile.next_index[i] - 1;
+        int prev_log_index = cm.machine.leader_volatile.next_index[i] - 1;
         int prev_log_term  = prev_log_index >= 0
-                                 ? raft_state.log.items[prev_log_index].term
+                                 ? cm.machine.log.items[prev_log_index].term
                                  : -1;
 
         ae.prev_log_index  = prev_log_index;
         ae.prev_log_term   = prev_log_term;
-        ae.leader_commit   = raft_state.commit_index;
+        ae.leader_commit   = cm.machine.commit_index;
 
-        for (int j = raft_state.leader_volatile.next_index[i];
-             j < raft_state.log.length; ++j) {
-            da_append(ae.entries, raft_state.log.items[j]);
+        for (int j = cm.machine.leader_volatile.next_index[i];
+             j < cm.machine.log.length; ++j) {
+            da_append(ae.entries, cm.machine.log.items[j]);
         }
 
         struct sockaddr_in peer_addr = {0};
@@ -709,7 +746,7 @@ static void broadcast_heartbeat(int fd, peer_t peers[NODES_COUNT])
 
 static void server_start(peer_t peers[NODES_COUNT])
 {
-    int sock_fd = udp_listen(peers[node_id].addr, peers[node_id].port);
+    int sock_fd = udp_listen(peers[cm.node_id].addr, peers[cm.node_id].port);
 
     fd_set read_fds;
     unsigned char buf[BUFSIZ];
@@ -765,7 +802,7 @@ static void server_start(peer_t peers[NODES_COUNT])
             case MT_REQUEST_VOTE_RS:
                 handle_request_vote_rs(sock_fd, &peer_addr,
                                        &raft_message.request_vote_response);
-                if (raft_state.state == RS_LEADER) {
+                if (cm.machine.state == RS_LEADER) {
                     broadcast_heartbeat(sock_fd, peers);
                     last_heartbeat_s  = get_seconds_timestamp();
                     select_timeout_us = 0;
@@ -781,7 +818,7 @@ static void server_start(peer_t peers[NODES_COUNT])
         // RS_CANDIDATE, skip it
         remaining_s = get_seconds_timestamp() - last_heartbeat_s;
 
-        if (raft_state.state == RS_LEADER) {
+        if (cm.machine.state == RS_LEADER) {
             // We're in RS_LEADER state, sending heartbeats
             if (remaining_s >= select_timeout_s) {
                 broadcast_heartbeat(sock_fd, peers);
@@ -815,19 +852,24 @@ static void server_start(peer_t peers[NODES_COUNT])
 
 int main(int argc, char **argv)
 {
-    if (argc > 1)
-        node_id = atoi(argv[1]);
+    cm.nodes[0] = (peer_t){"127.0.0.1", 8777};
+    cm.nodes[1] = (peer_t){"127.0.0.1", 8778};
+    cm.nodes[2] = (peer_t){"127.0.0.1", 8779};
 
-    if (node_id > NODES_COUNT)
+    if (argc > 1)
+        cm.node_id = atoi(argv[1]);
+
+    if (cm.node_id > NODES_COUNT)
         exit(EXIT_FAILURE);
 
     printf("[INFO] Cluster topology\n");
     for (int i = 0; i < NODES_COUNT; ++i)
-        printf("[INFO]\t - %s:%d (%d)\n", nodes[i].addr, nodes[i].port, i);
+        printf("[INFO]\t - %s:%d (%d)\n", cm.nodes[i].addr, cm.nodes[i].port,
+               i);
 
-    printf("[INFO] Node %d starting\n", node_id);
+    printf("[INFO] Node %d starting\n", cm.node_id);
     srand(time(NULL));
-    server_start(nodes);
+    server_start(cm.nodes);
 
     return 0;
 }
