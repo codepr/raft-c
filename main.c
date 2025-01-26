@@ -443,6 +443,15 @@ static void transition_to_candidate(void)
     printf("[INFO] Transition to CANDIDATE\n");
 }
 
+static int last_log_term(void)
+{
+    return cm.machine.log.length == 0
+               ? 0
+               : cm.machine.log.items[cm.machine.log.length - 1].term;
+}
+
+static int last_log_index(void) { return cm.machine.log.length - 1; }
+
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 {
     // term
@@ -623,14 +632,10 @@ static void start_election(int fd, peer_t peers[NODES_COUNT])
 
     raft_message_t message = {
         .type             = MT_REQUEST_VOTE_RQ,
-        .request_vote_rpc = {
-            .term         = cm.machine.current_term,
-            .candidate_id = cm.node_id,
-            .last_log_term =
-                cm.machine.log.length == 0
-                    ? 0
-                    : cm.machine.log.items[cm.machine.log.length - 1].term,
-            .last_log_index = cm.machine.log.length}};
+        .request_vote_rpc = {.term           = cm.machine.current_term,
+                             .candidate_id   = cm.node_id,
+                             .last_log_term  = last_log_term(),
+                             .last_log_index = last_log_index()}};
     for (int i = 0; i < NODES_COUNT; ++i) {
         if (i == cm.node_id)
             continue;
@@ -657,21 +662,25 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
         printf("[INFO] Term out of date in RequestVote\n");
         transition_to_follower(rv->term);
     }
-    request_vote_reply_t rv_response = {0};
+
+    request_vote_reply_t rv_reply = {0};
     if (cm.machine.current_term == rv->term &&
         (cm.machine.voted_for == -1 ||
-         cm.machine.voted_for == rv->candidate_id)) {
-        rv_response.vote_granted = true;
-        cm.machine.voted_for     = rv->candidate_id;
+         cm.machine.voted_for == rv->candidate_id) &&
+        (rv->last_log_term > last_log_term() ||
+         (rv->last_log_term == last_log_term() &&
+          rv->last_log_index >= last_log_index()))) {
+        rv_reply.vote_granted = true;
+        cm.machine.voted_for  = rv->candidate_id;
 
     } else {
-        rv_response.vote_granted = false;
+        rv_reply.vote_granted = false;
     }
-    rv_response.term             = cm.machine.current_term;
+    rv_reply.term                = cm.machine.current_term;
 
     const raft_message_t message = {.type               = MT_REQUEST_VOTE_RS,
                                     .request_id         = cm.next_request_id++,
-                                    .request_vote_reply = rv_response};
+                                    .request_vote_reply = rv_reply};
     if (send_raft_message(fd, peer, &message) < 0)
         fprintf(stderr, "failed to send RequestVoteReply to client %d: %s\n",
                 peer->sin_addr.s_addr, strerror(errno));
@@ -700,7 +709,7 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 {
     printf("[INFO] Received AppendEntriesRPC\n");
 
-    append_entries_reply_t ae_response = {0};
+    append_entries_reply_t ae_reply = {0};
 
     if (ae->term > cm.machine.current_term) {
         printf("[INFO] Term out of date in AppendEntriesRPC\n");
@@ -711,14 +720,50 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
         if (cm.machine.state != RS_FOLLOWER) {
             transition_to_follower(ae->term);
         }
-        ae_response.success = true;
-    }
 
-    ae_response.term             = cm.machine.current_term;
+        if (ae->prev_log_index == -1 ||
+            ((ae->prev_log_index < cm.machine.log.length - 1) &&
+             ae->prev_log_term ==
+                 cm.machine.log.items[ae->prev_log_index].term)) {
+            ae_reply.success     = true;
+
+            int log_insert_index = ae->prev_log_index + 1;
+            int new_entris_index = 0;
+
+            if (ae->entries) {
+                while (1) {
+                    if (log_insert_index >= cm.machine.log.length - 1 ||
+                        new_entris_index >= ae->entries->length - 1)
+                        break;
+                    if (cm.machine.log.items[log_insert_index].term !=
+                        ae->entries->items[new_entris_index].term)
+                        break;
+                    log_insert_index++;
+                    new_entris_index++;
+                }
+
+                if (new_entris_index < ae->entries->length - 1) {
+                    for (int i = log_insert_index; i < ae->entries->length;
+                         ++i, new_entris_index++) {
+                        cm.machine.log.items[i] =
+                            ae->entries->items[new_entris_index];
+                    }
+                }
+            }
+
+            if (ae->leader_commit > cm.machine.commit_index) {
+                cm.machine.commit_index =
+                    ae->leader_commit < cm.machine.log.length - 2
+                        ? ae->leader_commit
+                        : cm.machine.log.length - 2;
+            }
+        }
+    }
+    ae_reply.term                = cm.machine.current_term;
 
     const raft_message_t message = {.type       = MT_APPEND_ENTRIES_RS,
                                     .request_id = cm.next_request_id++,
-                                    .append_entries_reply = ae_response};
+                                    .append_entries_reply = ae_reply};
 
     if (send_raft_message(fd, peer, &message) < 0)
         fprintf(stderr, "failed to send AppendEntriesReply to client %d: %s\n",
@@ -744,10 +789,9 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
         return;
     }
 
-    // TODO get peer ID from nodes
     int peer_id = find_peer_index(peer);
     if (peer_id < 0) {
-        printf("[ERROR] Could not find peer ID for response\n");
+        printf("[ERROR] Could not find peer ID for reply\n");
         return;
     }
 
