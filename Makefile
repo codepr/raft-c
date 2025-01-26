@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-Wall -Werror -pedantic -ggdb -std=c11 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -pg
 
-RAFT_C_SRC = main.c
+RAFT_C_SRC = raft.c app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
 
