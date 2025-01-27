@@ -405,7 +405,8 @@ typedef struct {
     uint64_t request_id;
     struct sockaddr_in peer;
     time_t timestamp;
-    raft_message_t message;
+    int last_log_entry_index;
+    int entries_length;
 } pending_request_t;
 
 typedef struct {
@@ -617,10 +618,13 @@ static int send_raft_message(int fd, const struct sockaddr_in *peer,
 
     if (rm->type == MT_APPEND_ENTRIES_RQ) {
         // Record pending request
-        const pending_request_t pending_request = {.request_id = rm->request_id,
-                                                   .peer       = *peer,
-                                                   .timestamp  = time(NULL),
-                                                   .message    = *rm};
+        const pending_request_t pending_request = {
+            .request_id           = rm->request_id,
+            .peer                 = *peer,
+            .timestamp            = time(NULL),
+            .entries_length       = rm->append_entries_rpc.entries.length,
+            .last_log_entry_index = rm->append_entries_rpc.prev_log_index +
+                                    rm->append_entries_rpc.entries.length};
 
         da_append(&cm.pending_requests, pending_request);
     }
@@ -796,30 +800,30 @@ int find_peer_index(const struct sockaddr_in *peer)
     return -1;
 }
 
-// static int remove_pending_request(const pending_request_t *req)
-// {
-//     for (int i = 0; i < cm.pending_requests.length; ++i) {
-//         if (cm.pending_requests.items[i].request_id == req->request_id) {
-//             // Shift remaining requests to fill the gap
-//             memmove(&cm.pending_requests.items[i],
-//                     &cm.pending_requests.items[i + 1],
-//                     (cm.pending_requests.length - i - 1) *
-//                         sizeof(pending_request_t));
-//             cm.pending_requests.length--;
-//             return 0;
-//         }
-//     }
-//     return -1; // Not found
-// }
-//
-// static pending_request_t *find_pending_request(uint64_t request_id)
-// {
-//     for (int i = 0; i < cm.pending_requests.length; ++i) {
-//         if (cm.pending_requests.items[i].request_id == request_id)
-//             return &cm.pending_requests.items[i];
-//     }
-//     return NULL;
-// }
+static int remove_pending_request(const pending_request_t *req)
+{
+    for (int i = 0; i < cm.pending_requests.length; ++i) {
+        if (cm.pending_requests.items[i].request_id == req->request_id) {
+            // Shift remaining requests to fill the gap
+            memmove(&cm.pending_requests.items[i],
+                    &cm.pending_requests.items[i + 1],
+                    (cm.pending_requests.length - i - 1) *
+                        sizeof(pending_request_t));
+            cm.pending_requests.length--;
+            return 0;
+        }
+    }
+    return -1; // Not found
+}
+
+static pending_request_t *find_pending_request(uint64_t request_id)
+{
+    for (int i = 0; i < cm.pending_requests.length; ++i) {
+        if (cm.pending_requests.items[i].request_id == request_id)
+            return &cm.pending_requests.items[i];
+    }
+    return NULL;
+}
 
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                                      const append_entries_reply_t *ae,
@@ -834,6 +838,17 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
     if (peer_id < 0) {
         printf("[ERROR] Could not find peer ID for reply\n");
         return;
+    }
+
+    pending_request_t *pending_request = find_pending_request(request_id);
+    if (pending_request) {
+        printf("[INFO] Update pending request %llu\n", request_id);
+        cm.machine.leader_volatile.next_index[peer_id] =
+            pending_request->entries_length;
+        cm.machine.leader_volatile.match_index[peer_id] =
+            pending_request->last_log_entry_index;
+
+        remove_pending_request(pending_request);
     }
 
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
