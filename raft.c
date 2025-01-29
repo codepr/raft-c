@@ -40,6 +40,16 @@
         (da)->items[(da)->length++] = (item);                                  \
     } while (0)
 
+#define da_insert(da, i, item)                                                 \
+    do {                                                                       \
+        assert((da));                                                          \
+        if ((i) >= (da)->length)                                               \
+            da_extend((da));                                                   \
+        (da)->items[i] = (item);                                               \
+        if ((i) >= (da)->length)                                               \
+            (da)->length++;                                                    \
+    } while (0)
+
 #define da_back(da)                                                            \
     do {                                                                       \
         assert((da));                                                          \
@@ -616,7 +626,8 @@ static int send_raft_message(int fd, const struct sockaddr_in *peer,
 {
     uint8_t buf[BUFSIZ] = {0};
 
-    if (rm->type == MT_APPEND_ENTRIES_RQ) {
+    if (rm->type == MT_APPEND_ENTRIES_RQ &&
+        rm->append_entries_rpc.entries.length > 0) {
         // Record pending request
         const pending_request_t pending_request = {
             .request_id           = rm->request_id,
@@ -734,6 +745,10 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
         transition_to_follower(ae->term);
     }
 
+    for (int i = 0; i < cm.machine.log.length; ++i)
+        printf("[DEBUG] \t %d ~> (term=%d value=%d)\n", i,
+               cm.machine.log.items[i].term, cm.machine.log.items[i].value);
+
     if (ae->term == cm.machine.current_term) {
         if (cm.machine.state != RS_FOLLOWER) {
             transition_to_follower(ae->term);
@@ -741,32 +756,30 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 
         if (ae->prev_log_index == -1 ||
             (cm.machine.log.capacity &&
-             ((ae->prev_log_index < cm.machine.log.length) &&
+             (ae->prev_log_index < cm.machine.log.length &&
               ae->prev_log_term ==
                   cm.machine.log.items[ae->prev_log_index].term))) {
-            ae_reply.success     = true;
+            ae_reply.success      = true;
 
-            int log_insert_index = ae->prev_log_index + 1;
-            int new_entris_index = 0;
+            int left_index        = ae->prev_log_index + 1;
+            int new_entries_index = 0;
 
-            if (ae->entries.capacity && cm.machine.log.capacity) {
-                while (1) {
-                    if (log_insert_index >= cm.machine.log.length ||
-                        new_entris_index >= ae->entries.length)
-                        break;
-                    if (cm.machine.log.items[log_insert_index].term !=
-                        ae->entries.items[new_entris_index].term)
-                        break;
-                    log_insert_index++;
-                    new_entris_index++;
-                }
+            while (1) {
+                if (left_index >= cm.machine.log.length ||
+                    new_entries_index >= ae->entries.length)
+                    break;
+                if (cm.machine.log.items[left_index].term !=
+                    ae->entries.items[new_entries_index].term)
+                    break;
+                left_index++;
+                new_entries_index++;
+            }
 
-                if (new_entris_index < ae->entries.length) {
-                    for (int i = log_insert_index; i < ae->entries.length;
-                         ++i, new_entris_index++) {
-                        cm.machine.log.items[i] =
-                            ae->entries.items[new_entris_index];
-                    }
+            if (new_entries_index < ae->entries.length) {
+                for (int i = left_index; i < left_index + ae->entries.length;
+                     ++i, new_entries_index++) {
+                    da_insert(&cm.machine.log, i,
+                              ae->entries.items[new_entries_index]);
                 }
             }
 
@@ -841,24 +854,19 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
     }
 
     pending_request_t *pending_request = find_pending_request(request_id);
-    if (pending_request) {
-        printf("[INFO] Update pending request %llu\n", request_id);
-        cm.machine.leader_volatile.next_index[peer_id] =
-            pending_request->entries_length;
-        cm.machine.leader_volatile.match_index[peer_id] =
-            pending_request->last_log_entry_index;
-
-        remove_pending_request(pending_request);
-    }
 
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
-            cm.machine.leader_volatile.next_index[peer_id] =
-                cm.machine.log.length == 0 ? 0 : cm.machine.log.length;
-            cm.machine.leader_volatile.match_index[peer_id] =
-                cm.machine.leader_volatile.next_index[peer_id] == -1
-                    ? -1
-                    : cm.machine.leader_volatile.next_index[peer_id] - 1;
+            if (pending_request) {
+                printf("[DEBUG] Update pending request %llu peer=%d\n",
+                       request_id, peer_id);
+                cm.machine.leader_volatile.next_index[peer_id] +=
+                    pending_request->entries_length;
+                cm.machine.leader_volatile.match_index[peer_id] =
+                    cm.machine.leader_volatile.next_index[peer_id] - 1;
+
+                remove_pending_request(pending_request);
+            }
 
             int current_commit_index = cm.machine.commit_index;
             for (int i = cm.machine.commit_index + 1; i < cm.machine.log.length;
@@ -880,6 +888,9 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
         } else {
             if (cm.machine.leader_volatile.next_index[peer_id] > 0)
                 cm.machine.leader_volatile.next_index[peer_id]--;
+            printf("[INFO] AppendEntriesReply from %d success=false "
+                   "next_index=%d\n",
+                   peer_id, cm.machine.leader_volatile.next_index[peer_id]);
         }
     }
 }
@@ -890,14 +901,13 @@ static void broadcast_heartbeat(int fd)
     raft_message_t message = {
         .type               = MT_APPEND_ENTRIES_RQ,
         .append_entries_rpc = {.term      = cm.machine.current_term,
-                               .leader_id = cm.node_id}};
+                               .leader_id = cm.node_id,
+                               .entries   = {.length = 0, .capacity = 0}}};
     for (int i = 0; i < NODES_COUNT; ++i) {
         if (i == cm.node_id)
             continue;
 
-        int prev_log_index = cm.machine.leader_volatile.next_index[i] > 0
-                                 ? cm.machine.leader_volatile.next_index[i] - 1
-                                 : 0;
+        int prev_log_index = cm.machine.leader_volatile.next_index[i] - 1;
         int prev_log_term  = cm.machine.log.length && prev_log_index >= 0
                                  ? cm.machine.log.items[prev_log_index].term
                                  : -1;
@@ -917,7 +927,12 @@ static void broadcast_heartbeat(int fd)
             fprintf(stderr,
                     "failed to send AppendEntriesRPC to client %i: %s\n",
                     cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+        // Manually reset index for the next peer
+        message.append_entries_rpc.entries.length = 0;
     }
+
+    if (message.append_entries_rpc.entries.capacity)
+        free(message.append_entries_rpc.entries.items);
 }
 
 #define HEARTBEAT_TIMEOUT_S 1
