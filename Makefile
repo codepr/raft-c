@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Werror -pedantic -ggdb -std=c11 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -pg
+CFLAGS=-Wall -Werror -pedantic -ggdb -std=c2x -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -pg -Wno-gnu-zero-variadic-macro-arguments
 
 RAFT_C_SRC = raft.c app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)

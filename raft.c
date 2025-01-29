@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +17,35 @@
 #define RANDOM(a, b)       rand() % ((b) + 1 - (a)) + (a)
 #define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 
+#define LL_DEBUG           0
+#define LL_INFO            1
+#define LL_WARNING         2
+#define LL_ERROR           3
+#define LL_CRITICAL        4
+
+#define LOG_LEVEL          LL_DEBUG
+
+#define RAFT_LOG(level, level_str, fmt, ...)                                   \
+    do {                                                                       \
+        if (level >= LOG_LEVEL) {                                              \
+            fprintf(stderr, "[%s] " fmt "%s",                                  \
+                    level_str __VA_OPT__(, ) __VA_ARGS__, "\n");               \
+        }                                                                      \
+        if (level == LL_CRITICAL)                                              \
+            exit(EXIT_FAILURE);                                                \
+    } while (0)
+
+#define log_debug(fmt, ...)                                                    \
+    RAFT_LOG(LL_DEBUG, "DEBUG", fmt __VA_OPT__(, ) __VA_ARGS__)
+#define log_info(fmt, ...)                                                     \
+    RAFT_LOG(LL_INFO, "INFO", fmt __VA_OPT__(, ) __VA_ARGS__)
+#define log_warning(fmt, ...)                                                  \
+    RAFT_LOG(LL_WARNING, "WARNING", fmt __VA_OPT__(, ) __VA_ARGS__)
+#define log_error(fmt, ...)                                                    \
+    RAFT_LOG(LL_ERROR, "ERROR", fmt __VA_OPT__(, ) __VA_ARGS__)
+#define log_critical(fmt, ...)                                                 \
+    RAFT_LOG(LL_CRITICAL, "CRITICAL", fmt __VA_OPT__(, ) __VA_ARGS__)
+
 /**
  ** Dynamic array utility macros
  **/
@@ -27,8 +57,7 @@
         (da)->items =                                                          \
             realloc((da)->items, (da)->capacity * sizeof(*(da)->items));       \
         if (!(da)->items) {                                                    \
-            fprintf(stderr, "DA realloc failed");                              \
-            exit(EXIT_FAILURE);                                                \
+            log_critical("DA realloc failed");                                 \
         }                                                                      \
     } while (0)
 
@@ -442,7 +471,7 @@ static void transition_to_leader(void)
         cm.machine.leader_volatile.next_index[i]  = cm.machine.log.length;
         cm.machine.leader_volatile.match_index[i] = -1;
     }
-    printf("[INFO] Transition to LEADER\n");
+    log_info("Transition to LEADER");
 }
 
 static void transition_to_follower(int term)
@@ -451,14 +480,14 @@ static void transition_to_follower(int term)
     cm.machine.voted_for    = -1;
     cm.machine.current_term = term;
 
-    printf("[INFO] Transition to FOLLOWER\n");
+    log_info("Transition to FOLLOWER");
 }
 
 static void transition_to_candidate(void)
 {
     cm.machine.state = RS_CANDIDATE;
 
-    printf("[INFO] Transition to CANDIDATE\n");
+    log_info("Transition to CANDIDATE");
 }
 
 static int last_log_term(void)
@@ -649,7 +678,7 @@ static void start_election(int fd)
     if (cm.machine.state != RS_CANDIDATE)
         return;
 
-    printf("[INFO] Start election current_term=%d\n", cm.machine.current_term);
+    log_info("Start election current_term=%d", cm.machine.current_term);
     cm.votes_received = 1;
     cm.machine.current_term++;
     cm.machine.voted_for   = cm.node_id;
@@ -666,16 +695,16 @@ static void start_election(int fd)
 
         message.request_id = cm.next_request_id++;
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
-            fprintf(stderr, "failed to send RequestVoteRPC to client %i: %s\n",
-                    cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+            log_error("Failed to send RequestVoteRPC to client %i: %s",
+                      cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
     }
 }
 
 static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
                                    const request_vote_rpc_t *rv)
 {
-    printf("[INFO] Received RequestVoteRPC [current_term=%d, voted_for=%d]\n",
-           cm.machine.current_term, cm.machine.voted_for);
+    log_info("Received RequestVoteRPC [current_term=%d, voted_for=%d]",
+             cm.machine.current_term, cm.machine.voted_for);
     // - If current term > candidate term
     // reply false
     // - If candidate id is unset (0) or
@@ -683,7 +712,7 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
     // with
     //   the state, reply true
     if (rv->term > cm.machine.current_term) {
-        printf("[INFO] Term out of date in RequestVote\n");
+        log_info("Term out of date in RequestVote");
         transition_to_follower(rv->term);
     }
 
@@ -706,15 +735,15 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
                                     .request_id         = cm.next_request_id++,
                                     .request_vote_reply = rv_reply};
     if (send_raft_message(fd, peer, &message) < 0)
-        fprintf(stderr, "failed to send RequestVoteReply to client %d: %s\n",
-                peer->sin_addr.s_addr, strerror(errno));
+        log_error("Failed to send RequestVoteReply to client %d: %s",
+                  peer->sin_addr.s_addr, strerror(errno));
 }
 
 static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
                                    const request_vote_reply_t *rv)
 {
-    printf("[INFO] Received RequestVoteReply(term=%d, vote_granted=%d)\n",
-           rv->term, rv->vote_granted);
+    log_info("Received RequestVoteReply(term=%d, vote_granted=%d)", rv->term,
+             rv->vote_granted);
     // Already a leader, discard vote
     if (cm.machine.state != RS_CANDIDATE)
         return;
@@ -732,22 +761,21 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
                                      const append_entries_rpc_t *ae,
                                      uint64_t request_id)
 {
-    printf("[INFO] Received AppendEntriesRPC");
+    log_info("Received AppendEntriesRPC");
     for (int i = 0; i < ae->entries.length; ++i)
-        printf("(term=%d, value=%d) ", ae->entries.items[i].term,
-               ae->entries.items[i].value);
-    printf("\n");
+        log_debug("\t(term=%d, value=%d) ", ae->entries.items[i].term,
+                  ae->entries.items[i].value);
 
     append_entries_reply_t ae_reply = {0};
 
     if (ae->term > cm.machine.current_term) {
-        printf("[INFO] Term out of date in AppendEntriesRPC\n");
+        log_info("Term out of date in AppendEntriesRPC");
         transition_to_follower(ae->term);
     }
 
     for (int i = 0; i < cm.machine.log.length; ++i)
-        printf("[DEBUG] \t %d ~> (term=%d value=%d)\n", i,
-               cm.machine.log.items[i].term, cm.machine.log.items[i].value);
+        log_debug("\t %d ~> (term=%d value=%d)", i,
+                  cm.machine.log.items[i].term, cm.machine.log.items[i].value);
 
     if (ae->term == cm.machine.current_term) {
         if (cm.machine.state != RS_FOLLOWER) {
@@ -798,8 +826,8 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
                                     .append_entries_reply = ae_reply};
 
     if (send_raft_message(fd, peer, &message) < 0)
-        fprintf(stderr, "failed to send AppendEntriesReply to client %d: %s\n",
-                peer->sin_addr.s_addr, strerror(errno));
+        log_error("Failed to send AppendEntriesReply to client %d: %s",
+                  peer->sin_addr.s_addr, strerror(errno));
 }
 
 int find_peer_index(const struct sockaddr_in *peer)
@@ -849,7 +877,7 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
 
     int peer_id = find_peer_index(peer);
     if (peer_id < 0) {
-        printf("[ERROR] Could not find peer ID for reply\n");
+        log_error("Could not find peer ID for reply");
         return;
     }
 
@@ -858,8 +886,8 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
             if (pending_request) {
-                printf("[DEBUG] Update pending request %llu peer=%d\n",
-                       request_id, peer_id);
+                log_debug("Update pending request %llu peer=%d", request_id,
+                          peer_id);
                 cm.machine.leader_volatile.next_index[peer_id] +=
                     pending_request->entries_length;
                 cm.machine.leader_volatile.match_index[peer_id] =
@@ -882,22 +910,21 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                 }
             }
             if (cm.machine.commit_index != current_commit_index) {
-                printf("[INFO] Leader sets commit_index=%d\n",
-                       cm.machine.commit_index);
+                log_info("Leader sets commit_index=%d",
+                         cm.machine.commit_index);
             }
         } else {
             if (cm.machine.leader_volatile.next_index[peer_id] > 0)
                 cm.machine.leader_volatile.next_index[peer_id]--;
-            printf("[INFO] AppendEntriesReply from %d success=false "
-                   "next_index=%d\n",
-                   peer_id, cm.machine.leader_volatile.next_index[peer_id]);
+            log_info("AppendEntriesReply from %d success=false next_index=%d",
+                     peer_id, cm.machine.leader_volatile.next_index[peer_id]);
         }
     }
 }
 
 static void broadcast_heartbeat(int fd)
 {
-    printf("[INFO] Broadcast heartbeat\n");
+    log_info("Broadcast heartbeat (term=%d)", cm.machine.current_term);
     raft_message_t message = {
         .type               = MT_APPEND_ENTRIES_RQ,
         .append_entries_rpc = {.term      = cm.machine.current_term,
@@ -924,13 +951,14 @@ static void broadcast_heartbeat(int fd)
         }
 
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
-            fprintf(stderr,
-                    "failed to send AppendEntriesRPC to client %i: %s\n",
-                    cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+            log_error("Failed to send AppendEntriesRPC to client %i: %s",
+                      cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
         // Manually reset index for the next peer
         message.append_entries_rpc.entries.length = 0;
     }
 
+    // TODO use a single append entries packet and free it once
+    // at the exit of the program
     if (message.append_entries_rpc.entries.capacity)
         free(message.append_entries_rpc.entries.items);
 }
@@ -956,8 +984,8 @@ void raft_server_start(int node_id)
     cm.node_id = node_id;
     char ip[IP_LENGTH];
     get_ip_str(&cm.nodes[cm.node_id].addr, ip, IP_LENGTH);
-    printf("[INFO] UDP listen on %s:%d\n", ip,
-           htons(cm.nodes[cm.node_id].addr.sin_port));
+    log_info("UDP listen on %s:%d", ip,
+             htons(cm.nodes[cm.node_id].addr.sin_port));
     int sock_fd = udp_listen(ip, htons(cm.nodes[cm.node_id].addr.sin_port));
 
     fd_set read_fds;
@@ -983,18 +1011,15 @@ void raft_server_start(int node_id)
         FD_SET(sock_fd, &read_fds);
 
         num_events = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
-        if (num_events < 0) {
-            fprintf(stderr, "select() error: %s\n", strerror(errno));
-            exit(EXIT_FAILURE);
-        }
+        if (num_events < 0)
+            log_critical("select() error: %s\n", strerror(errno));
 
         if (FD_ISSET(sock_fd, &read_fds)) {
             raft_message_t raft_message = {0};
             n                           = recvfrom(sock_fd, buf, sizeof(buf), 0,
                                                    (struct sockaddr *)&peer_addr, &addr_len);
             if (n < 0)
-                fprintf(stderr, "[ERROR] recvfrom error: %s\n",
-                        strerror(errno));
+                log_error("recvfrom error: %s", strerror(errno));
             message_type_t message_type = raft_message_read(buf, &raft_message);
             switch (message_type) {
             case MT_APPEND_ENTRIES_RQ:
@@ -1072,7 +1097,7 @@ int raft_submit(int value)
     if (cm.machine.state != RS_LEADER)
         return -1;
 
-    printf("[INFO] Received value %d\n", value);
+    log_info("Received value %d", value);
     int submit_index  = cm.machine.log.length;
     log_entry_t entry = {.term = cm.machine.current_term, .value = value};
     da_append(&cm.machine.log, entry);
