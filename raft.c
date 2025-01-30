@@ -408,6 +408,7 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
 typedef struct peer {
     struct sockaddr_in addr;
     time_t last_active;
+    size_t saved_log_length;
 } peer_t;
 
 typedef struct {
@@ -795,12 +796,11 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
         return;
     }
 
-    printf("Update peer located at node %d\n", peer_id);
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
             log_debug("Update peer=%d", peer_id);
             cm.machine.leader_volatile.next_index[peer_id] =
-                cm.machine.log.length;
+                cm.nodes[peer_id].saved_log_length;
             cm.machine.leader_volatile.match_index[peer_id] =
                 cm.machine.leader_volatile.next_index[peer_id] - 1;
 
@@ -848,10 +848,9 @@ static void broadcast_heartbeat(int fd)
             continue;
 
         int prev_log_index = cm.machine.leader_volatile.next_index[i] - 1;
-        printf("peer=%d prev_log_index=%d\n", i, prev_log_index);
-        int prev_log_term = cm.machine.log.length && prev_log_index >= 0
-                                ? cm.machine.log.items[prev_log_index].term
-                                : -1;
+        int prev_log_term  = cm.machine.log.length && prev_log_index >= 0
+                                 ? cm.machine.log.items[prev_log_index].term
+                                 : -1;
 
         message.append_entries_rpc.prev_log_term  = prev_log_term;
         message.append_entries_rpc.prev_log_index = prev_log_index;
@@ -871,6 +870,9 @@ static void broadcast_heartbeat(int fd)
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
             log_error("Failed to send AppendEntriesRPC to client %i: %s",
                       cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+
+        // Save current log length at the time of broadcast for this peer
+        cm.nodes[i].saved_log_length              = cm.machine.log.length;
 
         // Manually reset index for the next peer
         message.append_entries_rpc.entries.length = 0;
@@ -894,8 +896,8 @@ void raft_register_node(const char *addr, int port)
         perror("Invalid peer IP address");
         return;
     }
-    cm.nodes[registered_nodes++] =
-        (peer_t){.addr = s_addr, .last_active = time(NULL)};
+    cm.nodes[registered_nodes++] = (peer_t){
+        .addr = s_addr, .last_active = time(NULL), .saved_log_length = 0};
 }
 
 void raft_server_start(int node_id)
