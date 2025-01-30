@@ -145,30 +145,6 @@ static int32_t read_i32(const uint8_t *buf)
     return val;
 }
 
-// write_u64() -- store a 64-bit int into a char buffer (like htonl())
-static int write_u64(uint8_t *buf, uint64_t val)
-{
-    *buf++ = val >> 56;
-    *buf++ = val >> 48;
-    *buf++ = val >> 40;
-    *buf++ = val >> 32;
-    *buf++ = val >> 24;
-    *buf++ = val >> 16;
-    *buf++ = val >> 8;
-    *buf++ = val;
-
-    return sizeof(uint64_t);
-}
-
-// read_u64() -- unpack a 64-bit unsigned from a char buffer (like ntohl())
-uint64_t read_u64(const uint8_t *buf)
-{
-    return ((uint64_t)buf[0] << 56) | ((uint64_t)buf[1] << 48) |
-           ((uint64_t)buf[2] << 40) | ((uint64_t)buf[3] << 32) |
-           ((uint64_t)buf[4] << 24) | ((uint64_t)buf[5] << 16) |
-           ((uint64_t)buf[6] << 8) | buf[7];
-}
-
 /**
  ** Cluster communication and management - UDP network utility functions
  **
@@ -180,13 +156,9 @@ uint64_t read_u64(const uint8_t *buf)
 #define IP_LENGTH   16
 #define BACKLOG     128
 #define NODES_COUNT 3
+
 // TODO temporary
 static int registered_nodes = 0;
-
-typedef struct peer {
-    struct sockaddr_in addr;
-    time_t last_active;
-} peer_t;
 
 static int set_nonblocking(int fd)
 {
@@ -369,23 +341,20 @@ typedef struct raft_state {
         size_t capacity;
         log_entry_t *items;
     } log;
-    union {
-        struct {
-            int commit_index;
-            int last_applied;
-        } volatile;
-        struct {
-            int next_index[NODES_COUNT];
-            int match_index[NODES_COUNT];
-        } leader_volatile;
-    };
+    struct {
+        int commit_index;
+        int last_applied;
+    } state_volatile;
+    struct {
+        int next_index[NODES_COUNT];
+        int match_index[NODES_COUNT];
+    } leader_volatile;
 } raft_state_t;
 
 // Simple wrapper for a generic RAFT
 // message
 
 typedef struct raft_message {
-    uint64_t request_id;
     message_type_t type;
     union {
         request_vote_rpc_t request_vote_rpc;
@@ -398,8 +367,6 @@ typedef struct raft_message {
 static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
 {
     ssize_t bytes = write_u8(buf++, rm->type);
-    bytes += write_u64(buf, rm->request_id);
-    buf += sizeof(uint64_t);
     switch (rm->type) {
     case MT_APPEND_ENTRIES_RQ:
         bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
@@ -420,9 +387,7 @@ static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
 
 static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
 {
-    rm->type       = read_u8(buf++);
-    rm->request_id = read_u64(buf);
-    buf += sizeof(uint64_t);
+    rm->type = read_u8(buf++);
     switch (rm->type) {
     case MT_APPEND_ENTRIES_RQ:
         append_entries_rpc_read(&rm->append_entries_rpc, buf);
@@ -440,23 +405,14 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
     return rm->type;
 }
 
-typedef struct {
-    uint64_t request_id;
-    struct sockaddr_in peer;
-    time_t timestamp;
-    int last_log_entry_index;
-    int entries_length;
-} pending_request_t;
+typedef struct peer {
+    struct sockaddr_in addr;
+    time_t last_active;
+} peer_t;
 
 typedef struct {
     raft_state_t machine;
     peer_t nodes[NODES_COUNT];
-    struct {
-        size_t length;
-        size_t capacity;
-        pending_request_t *items;
-    } pending_requests;
-    uint64_t next_request_id;
     int votes_received;
     int node_id;
 } consensus_module_t;
@@ -655,21 +611,7 @@ static int send_raft_message(int fd, const struct sockaddr_in *peer,
 {
     uint8_t buf[BUFSIZ] = {0};
 
-    if (rm->type == MT_APPEND_ENTRIES_RQ &&
-        rm->append_entries_rpc.entries.length > 0) {
-        // Record pending request
-        const pending_request_t pending_request = {
-            .request_id           = rm->request_id,
-            .peer                 = *peer,
-            .timestamp            = time(NULL),
-            .entries_length       = rm->append_entries_rpc.entries.length,
-            .last_log_entry_index = rm->append_entries_rpc.prev_log_index +
-                                    rm->append_entries_rpc.entries.length};
-
-        da_append(&cm.pending_requests, pending_request);
-    }
-
-    ssize_t length = raft_message_write(&buf[0], rm);
+    ssize_t length      = raft_message_write(&buf[0], rm);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -693,7 +635,6 @@ static void start_election(int fd)
         if (i == cm.node_id)
             continue;
 
-        message.request_id = cm.next_request_id++;
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
             log_error("Failed to send RequestVoteRPC to client %i: %s",
                       cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
@@ -732,7 +673,6 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
     rv_reply.term                = cm.machine.current_term;
 
     const raft_message_t message = {.type               = MT_REQUEST_VOTE_RS,
-                                    .request_id         = cm.next_request_id++,
                                     .request_vote_reply = rv_reply};
     if (send_raft_message(fd, peer, &message) < 0)
         log_error("Failed to send RequestVoteReply to client %d: %s",
@@ -758,10 +698,11 @@ static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
 }
 
 static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
-                                     const append_entries_rpc_t *ae,
-                                     uint64_t request_id)
+                                     const append_entries_rpc_t *ae)
 {
     log_info("Received AppendEntriesRPC");
+    cm.nodes[cm.node_id].last_active = time(NULL);
+
     for (int i = 0; i < ae->entries.length; ++i)
         log_debug("\t(term=%d, value=%d) ", ae->entries.items[i].term,
                   ae->entries.items[i].value);
@@ -811,8 +752,8 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
                 }
             }
 
-            if (ae->leader_commit > cm.machine.commit_index) {
-                cm.machine.commit_index =
+            if (ae->leader_commit > cm.machine.state_volatile.commit_index) {
+                cm.machine.state_volatile.commit_index =
                     ae->leader_commit < cm.machine.log.length - 1
                         ? ae->leader_commit
                         : cm.machine.log.length - 1;
@@ -821,12 +762,11 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
     }
     ae_reply.term                = cm.machine.current_term;
 
-    const raft_message_t message = {.type       = MT_APPEND_ENTRIES_RS,
-                                    .request_id = request_id,
+    const raft_message_t message = {.type = MT_APPEND_ENTRIES_RS,
                                     .append_entries_reply = ae_reply};
 
     if (send_raft_message(fd, peer, &message) < 0)
-        log_error("Failed to send AppendEntriesReply to client %d: %s",
+        log_error("Failed to send AppendEntriesReply to peer %d: %s",
                   peer->sin_addr.s_addr, strerror(errno));
 }
 
@@ -841,34 +781,8 @@ int find_peer_index(const struct sockaddr_in *peer)
     return -1;
 }
 
-static int remove_pending_request(const pending_request_t *req)
-{
-    for (int i = 0; i < cm.pending_requests.length; ++i) {
-        if (cm.pending_requests.items[i].request_id == req->request_id) {
-            // Shift remaining requests to fill the gap
-            memmove(&cm.pending_requests.items[i],
-                    &cm.pending_requests.items[i + 1],
-                    (cm.pending_requests.length - i - 1) *
-                        sizeof(pending_request_t));
-            cm.pending_requests.length--;
-            return 0;
-        }
-    }
-    return -1; // Not found
-}
-
-static pending_request_t *find_pending_request(uint64_t request_id)
-{
-    for (int i = 0; i < cm.pending_requests.length; ++i) {
-        if (cm.pending_requests.items[i].request_id == request_id)
-            return &cm.pending_requests.items[i];
-    }
-    return NULL;
-}
-
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
-                                     const append_entries_reply_t *ae,
-                                     uint64_t request_id)
+                                     const append_entries_reply_t *ae)
 {
     if (ae->term > cm.machine.current_term) {
         transition_to_follower(ae->term);
@@ -881,24 +795,18 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
         return;
     }
 
-    pending_request_t *pending_request = find_pending_request(request_id);
-
+    printf("Update peer located at node %d\n", peer_id);
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
-            if (pending_request) {
-                log_debug("Update pending request %llu peer=%d", request_id,
-                          peer_id);
-                cm.machine.leader_volatile.next_index[peer_id] +=
-                    pending_request->entries_length;
-                cm.machine.leader_volatile.match_index[peer_id] =
-                    cm.machine.leader_volatile.next_index[peer_id] - 1;
+            log_debug("Update peer=%d", peer_id);
+            cm.machine.leader_volatile.next_index[peer_id] =
+                cm.machine.log.length;
+            cm.machine.leader_volatile.match_index[peer_id] =
+                cm.machine.leader_volatile.next_index[peer_id] - 1;
 
-                remove_pending_request(pending_request);
-            }
-
-            int current_commit_index = cm.machine.commit_index;
-            for (int i = cm.machine.commit_index + 1; i < cm.machine.log.length;
-                 ++i) {
+            int current_commit_index = cm.machine.state_volatile.commit_index;
+            for (int i = cm.machine.state_volatile.commit_index + 1;
+                 i < cm.machine.log.length; ++i) {
                 if (cm.machine.log.items[i].term == cm.machine.current_term) {
                     int match_count = 1;
                     for (int j = 0; j < NODES_COUNT; ++j) {
@@ -906,15 +814,19 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                             match_count++;
                     }
                     if (match_count * 2 > NODES_COUNT + 1)
-                        cm.machine.commit_index = i;
+                        cm.machine.state_volatile.commit_index = i;
                 }
             }
-            if (cm.machine.commit_index != current_commit_index) {
+            if (cm.machine.state_volatile.commit_index !=
+                current_commit_index) {
                 log_info("Leader sets commit_index=%d",
-                         cm.machine.commit_index);
+                         cm.machine.state_volatile.commit_index);
+
+                cm.machine.state_volatile.last_applied =
+                    cm.machine.state_volatile.commit_index;
             }
         } else {
-            if (cm.machine.leader_volatile.next_index[peer_id] > 0)
+            if (cm.machine.leader_volatile.next_index[peer_id])
                 cm.machine.leader_volatile.next_index[peer_id]--;
             log_info("AppendEntriesReply from %d success=false next_index=%d",
                      peer_id, cm.machine.leader_volatile.next_index[peer_id]);
@@ -925,24 +837,26 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
 static void broadcast_heartbeat(int fd)
 {
     log_info("Broadcast heartbeat (term=%d)", cm.machine.current_term);
+
     raft_message_t message = {
         .type               = MT_APPEND_ENTRIES_RQ,
         .append_entries_rpc = {.term      = cm.machine.current_term,
                                .leader_id = cm.node_id,
-                               .entries   = {.length = 0, .capacity = 0}}};
+                               .entries   = {0}}};
     for (int i = 0; i < NODES_COUNT; ++i) {
         if (i == cm.node_id)
             continue;
 
         int prev_log_index = cm.machine.leader_volatile.next_index[i] - 1;
-        int prev_log_term  = cm.machine.log.length && prev_log_index >= 0
-                                 ? cm.machine.log.items[prev_log_index].term
-                                 : -1;
+        printf("peer=%d prev_log_index=%d\n", i, prev_log_index);
+        int prev_log_term = cm.machine.log.length && prev_log_index >= 0
+                                ? cm.machine.log.items[prev_log_index].term
+                                : -1;
 
-        message.request_id = cm.next_request_id++,
-        message.append_entries_rpc.prev_log_index = prev_log_index;
         message.append_entries_rpc.prev_log_term  = prev_log_term;
-        message.append_entries_rpc.leader_commit  = cm.machine.commit_index;
+        message.append_entries_rpc.prev_log_index = prev_log_index;
+        message.append_entries_rpc.leader_commit =
+            cm.machine.state_volatile.commit_index;
 
         for (int j = cm.machine.leader_volatile.next_index[i];
              j < cm.machine.log.length; ++j) {
@@ -950,9 +864,14 @@ static void broadcast_heartbeat(int fd)
                       cm.machine.log.items[j]);
         }
 
+        // - Try to send the raft message out to the peer node, if it fails
+        //   mark the node as offline to avoid recording a pending request.
+        // - If it goes through correctly, record a pending request for that
+        //   peer node
         if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
             log_error("Failed to send AppendEntriesRPC to client %i: %s",
                       cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+
         // Manually reset index for the next peer
         message.append_entries_rpc.entries.length = 0;
     }
@@ -1026,13 +945,11 @@ void raft_server_start(int node_id)
                 last_update_time_us = get_microseconds_timestamp();
                 last_heartbeat_s    = get_seconds_timestamp();
                 handle_append_entries_rq(sock_fd, &peer_addr,
-                                         &raft_message.append_entries_rpc,
-                                         raft_message.request_id);
+                                         &raft_message.append_entries_rpc);
                 break;
             case MT_APPEND_ENTRIES_RS:
                 handle_append_entries_rs(sock_fd, &peer_addr,
-                                         &raft_message.append_entries_reply,
-                                         raft_message.request_id);
+                                         &raft_message.append_entries_reply);
                 break;
             case MT_REQUEST_VOTE_RQ:
                 handle_request_vote_rq(sock_fd, &peer_addr,
@@ -1103,44 +1020,3 @@ int raft_submit(int value)
     da_append(&cm.machine.log, entry);
     return submit_index;
 }
-
-// static void init_nodes(void)
-// {
-//     struct {
-//         char addr[IP_LENGTH];
-//         int port;
-//     } peers[NODES_COUNT] = {
-//         {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
-//
-//     for (int i = 0; i < NODES_COUNT; ++i) {
-//         printf("[INFO] Cluster topology\n");
-//         printf("[INFO]\t - %s:%d (%d)\n", peers[i].addr, peers[i].port, i);
-//
-//         struct sockaddr_in s_addr = {0};
-//         s_addr.sin_family         = AF_INET;
-//         s_addr.sin_port           = htons(peers[i].port);
-//
-//         if (inet_pton(AF_INET, peers[i].addr, &s_addr.sin_addr) <= 0) {
-//             perror("Invalid peer IP address");
-//             return;
-//         }
-//         cm.nodes[i] = (peer_t){.addr = s_addr, .last_active = time(NULL)};
-//     }
-// }
-
-// int main(int argc, char **argv)
-// {
-//     init_nodes();
-//
-//     if (argc > 1)
-//         cm.node_id = atoi(argv[1]);
-//
-//     if (cm.node_id > NODES_COUNT)
-//         exit(EXIT_FAILURE);
-//
-//     printf("[INFO] Node %d starting\n", cm.node_id);
-//     srand(time(NULL));
-//     raft_server_start(cm.node_id);
-//
-//     return 0;
-// }
