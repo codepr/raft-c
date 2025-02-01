@@ -1,5 +1,14 @@
 CC=gcc
-CFLAGS=-Wall -Werror -pedantic -ggdb -std=c2x -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -pg -Wno-gnu-zero-variadic-macro-arguments
+CFLAGS=-Wall \
+	   -Werror \
+	   -pedantic \
+	   -ggdb \
+	   -std=c2x \
+	   -fsanitize=address \
+	   -fsanitize=undefined \
+	   -fno-omit-frame-pointer \
+	   -pg \
+	   -Wno-gnu-zero-variadic-macro-arguments
 LDFLAGS = -L. -lraft
 
 RAFT_C_SRC = raft.c app_server.c

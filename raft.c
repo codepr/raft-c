@@ -425,12 +425,18 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
     return rm->type;
 }
 
+// Represents a peer in the Raft cluster.
 typedef struct peer {
     struct sockaddr_in addr;
     time_t last_active;
     size_t saved_log_length;
 } peer_t;
 
+/*
+ * Represents the consensus module that handles the Raft consensus mechanism.
+ * It contains the Raft state machine, the list of peers, and some other
+ * information related to the consensus process.
+ */
 typedef struct {
     raft_state_t machine;
     struct {
@@ -443,6 +449,7 @@ typedef struct {
     int current_leader_id;
 } consensus_module_t;
 
+// Global consensus module, initializing to 0 (zero-initialization).
 static consensus_module_t cm = {0};
 
 static void transition_to_leader(void)
