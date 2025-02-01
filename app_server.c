@@ -172,29 +172,58 @@ static void *raft_start(void *arg)
     return NULL;
 }
 
+typedef union {
+    int node_id;
+    int port;
+} config_t;
+
+static void print_usage(const char *prog_name)
+{
+    fprintf(stderr, "Usage: %s -n <node_id> -p <port>\n", prog_name);
+    exit(EXIT_FAILURE);
+}
+
+static void parse_args(int argc, char *argv[], config_t *config)
+{
+    int opt;
+    while ((opt = getopt(argc, argv, "n:p:")) != -1) {
+        switch (opt) {
+        case 'n':
+            config->node_id = atoi(optarg);
+            break;
+        case 'p':
+            config->port = atoi(optarg);
+            break;
+        default:
+            print_usage(argv[0]);
+        }
+    }
+
+    // Validate required arguments
+    if (config->node_id == -1 || config->port == -1) {
+        print_usage(argv[0]);
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
         exit(EXIT_FAILURE);
 
-    // TODO redundant
-    struct {
-        char addr[16];
-        int port;
-    } peers[3] = {
-        {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
+    config_t config = {-1};
 
-    int node_id = 0;
+    parse_args(argc, argv, &config);
+
     pthread_t raft_thread;
 
-    node_id = atoi(argv[1]);
+    raft_node_t peers[3] = {
+        {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
+    raft_seed_nodes(peers, 3);
 
-    for (int i = 0; i < 3; ++i)
-        raft_register_node(peers[i].addr, peers[i].port);
+    pthread_create(&raft_thread, NULL, &raft_start, &config.node_id);
 
-    pthread_create(&raft_thread, NULL, &raft_start, &node_id);
-
-    int server_fd = tcp_listen(peers[node_id].addr, peers[node_id].port);
+    int server_fd =
+        tcp_listen(peers[config.node_id].ip_addr, peers[config.node_id].port);
     if (server_fd < 0)
         exit(EXIT_FAILURE);
     server_start(server_fd);

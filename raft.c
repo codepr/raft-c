@@ -153,12 +153,7 @@ static int32_t read_i32(const uint8_t *buf)
  ** delivery guarantee ** and the communication is simplified.
  **/
 
-#define IP_LENGTH   16
-#define BACKLOG     128
-#define NODES_COUNT 3
-
-// TODO temporary
-static int registered_nodes = 0;
+#define MAX_NODES_COUNT 15
 
 static int set_nonblocking(int fd)
 {
@@ -262,11 +257,20 @@ static unsigned long long get_seconds_timestamp(void)
 // Generic header to identify requests
 
 typedef enum message_type {
-    MT_REQUEST_VOTE_RQ,
-    MT_REQUEST_VOTE_RS,
-    MT_APPEND_ENTRIES_RQ,
-    MT_APPEND_ENTRIES_RS
+    MT_GOSSIP_CLUSTER_JOIN_RPC,
+    MT_GOSSIP_ADD_PEER_RPC,
+    MT_RAFT_REQUEST_VOTE_RPC,
+    MT_RAFT_REQUEST_VOTE_REPLY,
+    MT_RAFT_APPEND_ENTRIES_RPC,
+    MT_RAFT_APPEND_ENTRIES_REPLY
 } message_type_t;
+
+// Gossip structs
+
+typedef struct {
+    char ip_addr[IP_LENGTH];
+    int port;
+} gossip_add_node_t;
 
 // RequestVoteRPC
 
@@ -306,6 +310,8 @@ typedef struct append_entries_reply {
     bool success;
 } append_entries_reply_t;
 
+static int gossip_add_node_rpc_write(uint8_t *buf, const gossip_add_node_t *ga);
+static int gossip_add_node_rpc_read(gossip_add_node_t *ga, const uint8_t *buf);
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv);
 static int request_vote_reply_write(uint8_t *buf,
                                     const request_vote_reply_t *rv);
@@ -346,8 +352,8 @@ typedef struct raft_state {
         int last_applied;
     } state_volatile;
     struct {
-        int next_index[NODES_COUNT];
-        int match_index[NODES_COUNT];
+        int next_index[MAX_NODES_COUNT];
+        int match_index[MAX_NODES_COUNT];
     } leader_volatile;
 } raft_state_t;
 
@@ -357,6 +363,7 @@ typedef struct raft_state {
 typedef struct raft_message {
     message_type_t type;
     union {
+        gossip_add_node_t gossip_add_node_rpc;
         request_vote_rpc_t request_vote_rpc;
         request_vote_reply_t request_vote_reply;
         append_entries_rpc_t append_entries_rpc;
@@ -368,16 +375,22 @@ static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
 {
     ssize_t bytes = write_u8(buf++, rm->type);
     switch (rm->type) {
-    case MT_APPEND_ENTRIES_RQ:
+    case MT_GOSSIP_CLUSTER_JOIN_RPC:
+        bytes += gossip_add_node_rpc_write(buf, &rm->gossip_add_node_rpc);
+        break;
+    case MT_GOSSIP_ADD_PEER_RPC:
+        bytes += gossip_add_node_rpc_write(buf, &rm->gossip_add_node_rpc);
+        break;
+    case MT_RAFT_APPEND_ENTRIES_RPC:
         bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
         break;
-    case MT_APPEND_ENTRIES_RS:
+    case MT_RAFT_APPEND_ENTRIES_REPLY:
         bytes += append_entries_reply_write(buf, &rm->append_entries_reply);
         break;
-    case MT_REQUEST_VOTE_RQ:
+    case MT_RAFT_REQUEST_VOTE_RPC:
         bytes += request_vote_rpc_write(buf, &rm->request_vote_rpc);
         break;
-    case MT_REQUEST_VOTE_RS:
+    case MT_RAFT_REQUEST_VOTE_REPLY:
         bytes += request_vote_reply_write(buf, &rm->request_vote_reply);
         break;
     }
@@ -389,16 +402,22 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
 {
     rm->type = read_u8(buf++);
     switch (rm->type) {
-    case MT_APPEND_ENTRIES_RQ:
+    case MT_GOSSIP_CLUSTER_JOIN_RPC:
+        gossip_add_node_rpc_read(&rm->gossip_add_node_rpc, buf);
+        break;
+    case MT_GOSSIP_ADD_PEER_RPC:
+        gossip_add_node_rpc_read(&rm->gossip_add_node_rpc, buf);
+        break;
+    case MT_RAFT_APPEND_ENTRIES_RPC:
         append_entries_rpc_read(&rm->append_entries_rpc, buf);
         break;
-    case MT_APPEND_ENTRIES_RS:
+    case MT_RAFT_APPEND_ENTRIES_REPLY:
         append_entries_reply_read(&rm->append_entries_reply, buf);
         break;
-    case MT_REQUEST_VOTE_RQ:
+    case MT_RAFT_REQUEST_VOTE_RPC:
         request_vote_rpc_read(&rm->request_vote_rpc, buf);
         break;
-    case MT_REQUEST_VOTE_RS:
+    case MT_RAFT_REQUEST_VOTE_REPLY:
         request_vote_reply_read(&rm->request_vote_reply, buf);
         break;
     }
@@ -413,18 +432,24 @@ typedef struct peer {
 
 typedef struct {
     raft_state_t machine;
-    peer_t nodes[NODES_COUNT];
+    struct {
+        size_t capacity;
+        size_t length;
+        peer_t *items;
+    } nodes;
     int votes_received;
     int node_id;
+    int current_leader_id;
 } consensus_module_t;
 
 static consensus_module_t cm = {0};
 
 static void transition_to_leader(void)
 {
-    cm.machine.state  = RS_LEADER;
-    cm.votes_received = 0;
-    for (int i = 0; i < NODES_COUNT; ++i) {
+    cm.machine.state     = RS_LEADER;
+    cm.votes_received    = 0;
+    cm.current_leader_id = cm.node_id;
+    for (int i = 0; i < cm.nodes.length; ++i) {
         cm.machine.leader_volatile.next_index[i]  = cm.machine.log.length;
         cm.machine.leader_volatile.match_index[i] = -1;
     }
@@ -565,6 +590,26 @@ static int append_entries_reply_write(uint8_t *buf,
 
     return bytes;
 }
+static int gossip_add_node_rpc_write(uint8_t *buf, const gossip_add_node_t *ga)
+{
+    uint8_t ip_addr_len = strlen(ga->ip_addr);
+    int bytes           = write_u8(buf++, ip_addr_len);
+    memcpy(buf, ga->ip_addr, ip_addr_len);
+    bytes += ip_addr_len;
+    bytes += write_i32(buf, ga->port);
+    return bytes;
+}
+
+static int gossip_add_node_rpc_read(gossip_add_node_t *ga, const uint8_t *buf)
+{
+    size_t ip_addr_len = read_u8(buf++);
+    if (ip_addr_len > IP_LENGTH)
+        return -1;
+    strncpy(ga->ip_addr, (char *)buf, ip_addr_len);
+    buf += ip_addr_len;
+    ga->port = read_i32(buf);
+    return 0;
+}
 
 static int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
 {
@@ -627,19 +672,45 @@ static void start_election(int fd)
     cm.machine.voted_for   = cm.node_id;
 
     raft_message_t message = {
-        .type             = MT_REQUEST_VOTE_RQ,
+        .type             = MT_RAFT_REQUEST_VOTE_RPC,
         .request_vote_rpc = {.term           = cm.machine.current_term,
                              .candidate_id   = cm.node_id,
                              .last_log_term  = last_log_term(),
                              .last_log_index = last_log_index()}};
-    for (int i = 0; i < NODES_COUNT; ++i) {
+    for (int i = 0; i < cm.nodes.length; ++i) {
         if (i == cm.node_id)
             continue;
 
-        if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
+        if (send_raft_message(fd, &cm.nodes.items[i].addr, &message) < 0)
             log_error("Failed to send RequestVoteRPC to client %i: %s",
-                      cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+                      cm.nodes.items[i].addr.sin_addr.s_addr, strerror(errno));
     }
+}
+
+static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
+{
+    raft_message_t raft_message = {.type = MT_GOSSIP_CLUSTER_JOIN_RPC,
+                                   .gossip_add_node_rpc = *an};
+    if (cm.machine.state == RS_LEADER) {
+        // TODO inefficient double translation (host str, port int) <=>
+        // struct sockaddr_in
+        raft_register_node(an->ip_addr, an->port);
+        // Forward the new node to the other nodes
+        raft_message.type = MT_GOSSIP_ADD_PEER_RPC;
+
+        for (int i = 0; i < cm.nodes.length; ++i) {
+            send_raft_message(fd, &cm.nodes.items[i].addr, &raft_message);
+        }
+    } else {
+        // Forward to the raft leader
+        send_raft_message(fd, &cm.nodes.items[cm.current_leader_id].addr,
+                          &raft_message);
+    }
+}
+
+static void handle_gossip_add_node_rpc(const gossip_add_node_t *an)
+{
+    raft_register_node(an->ip_addr, an->port);
 }
 
 static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
@@ -673,7 +744,7 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
     }
     rv_reply.term                = cm.machine.current_term;
 
-    const raft_message_t message = {.type               = MT_REQUEST_VOTE_RS,
+    const raft_message_t message = {.type = MT_RAFT_REQUEST_VOTE_REPLY,
                                     .request_vote_reply = rv_reply};
     if (send_raft_message(fd, peer, &message) < 0)
         log_error("Failed to send RequestVoteReply to client %d: %s",
@@ -693,16 +764,30 @@ static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
     } else {
         if (rv->vote_granted)
             ++cm.votes_received;
-        if (cm.votes_received > (NODES_COUNT / 2))
+        if (cm.votes_received > (cm.nodes.length / 2))
             transition_to_leader();
     }
+}
+
+static int find_peer_index(const struct sockaddr_in *peer)
+{
+    for (int i = 0; i < cm.nodes.length; ++i) {
+        if (cm.nodes.items[i].addr.sin_addr.s_addr == peer->sin_addr.s_addr &&
+            htons(cm.nodes.items[i].addr.sin_port) == htons(peer->sin_port)) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
                                      const append_entries_rpc_t *ae)
 {
     log_info("Received AppendEntriesRPC");
-    cm.nodes[cm.node_id].last_active = time(NULL);
+    cm.nodes.items[cm.node_id].last_active = time(NULL);
+
+    // Keep the current leader up to date
+    cm.current_leader_id                   = find_peer_index(peer);
 
     for (int i = 0; i < ae->entries.length; ++i)
         log_debug("\t(term=%d, value=%d) ", ae->entries.items[i].term,
@@ -763,23 +848,12 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
     }
     ae_reply.term                = cm.machine.current_term;
 
-    const raft_message_t message = {.type = MT_APPEND_ENTRIES_RS,
+    const raft_message_t message = {.type = MT_RAFT_APPEND_ENTRIES_REPLY,
                                     .append_entries_reply = ae_reply};
 
     if (send_raft_message(fd, peer, &message) < 0)
         log_error("Failed to send AppendEntriesReply to peer %d: %s",
                   peer->sin_addr.s_addr, strerror(errno));
-}
-
-int find_peer_index(const struct sockaddr_in *peer)
-{
-    for (int i = 0; i < NODES_COUNT; ++i) {
-        if (cm.nodes[i].addr.sin_addr.s_addr == peer->sin_addr.s_addr &&
-            htons(cm.nodes[i].addr.sin_port) == htons(peer->sin_port)) {
-            return i;
-        }
-    }
-    return -1;
 }
 
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
@@ -800,7 +874,7 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
         if (ae->success) {
             log_debug("Update peer=%d", peer_id);
             cm.machine.leader_volatile.next_index[peer_id] =
-                cm.nodes[peer_id].saved_log_length;
+                cm.nodes.items[peer_id].saved_log_length;
             cm.machine.leader_volatile.match_index[peer_id] =
                 cm.machine.leader_volatile.next_index[peer_id] - 1;
 
@@ -809,11 +883,11 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                  i < cm.machine.log.length; ++i) {
                 if (cm.machine.log.items[i].term == cm.machine.current_term) {
                     int match_count = 1;
-                    for (int j = 0; j < NODES_COUNT; ++j) {
+                    for (int j = 0; j < cm.nodes.length; ++j) {
                         if (cm.machine.leader_volatile.match_index[i] >= i)
                             match_count++;
                     }
-                    if (match_count * 2 > NODES_COUNT + 1)
+                    if (match_count * 2 > cm.nodes.length + 1)
                         cm.machine.state_volatile.commit_index = i;
                 }
             }
@@ -839,11 +913,11 @@ static void broadcast_heartbeat(int fd)
     log_info("Broadcast heartbeat (term=%d)", cm.machine.current_term);
 
     raft_message_t message = {
-        .type               = MT_APPEND_ENTRIES_RQ,
+        .type               = MT_RAFT_APPEND_ENTRIES_RPC,
         .append_entries_rpc = {.term      = cm.machine.current_term,
                                .leader_id = cm.node_id,
                                .entries   = {0}}};
-    for (int i = 0; i < NODES_COUNT; ++i) {
+    for (int i = 0; i < cm.nodes.length; ++i) {
         if (i == cm.node_id)
             continue;
 
@@ -867,12 +941,12 @@ static void broadcast_heartbeat(int fd)
         //   mark the node as offline to avoid recording a pending request.
         // - If it goes through correctly, record a pending request for that
         //   peer node
-        if (send_raft_message(fd, &cm.nodes[i].addr, &message) < 0)
+        if (send_raft_message(fd, &cm.nodes.items[i].addr, &message) < 0)
             log_error("Failed to send AppendEntriesRPC to client %i: %s",
-                      cm.nodes[i].addr.sin_addr.s_addr, strerror(errno));
+                      cm.nodes.items[i].addr.sin_addr.s_addr, strerror(errno));
 
         // Save current log length at the time of broadcast for this peer
-        cm.nodes[i].saved_log_length              = cm.machine.log.length;
+        cm.nodes.items[i].saved_log_length        = cm.machine.log.length;
 
         // Manually reset index for the next peer
         message.append_entries_rpc.entries.length = 0;
@@ -886,7 +960,22 @@ static void broadcast_heartbeat(int fd)
 
 #define HEARTBEAT_TIMEOUT_S 1
 
-void raft_register_node(const char *addr, int port)
+static int raft_register_peer(const struct sockaddr_in *s_addr)
+{
+    int node_id = -1;
+    // If already registerd exit
+    if ((node_id = find_peer_index(s_addr)) > 0)
+        return node_id;
+
+    peer_t new_peer = (peer_t){
+        .addr = *s_addr, .last_active = time(NULL), .saved_log_length = 0};
+
+    da_append(&cm.nodes, new_peer);
+
+    return cm.nodes.length - 1;
+}
+
+int raft_register_node(const char *addr, int port)
 {
     struct sockaddr_in s_addr = {0};
     s_addr.sin_family         = AF_INET;
@@ -894,20 +983,27 @@ void raft_register_node(const char *addr, int port)
 
     if (inet_pton(AF_INET, addr, &s_addr.sin_addr) <= 0) {
         perror("Invalid peer IP address");
-        return;
+        return -1;
     }
-    cm.nodes[registered_nodes++] = (peer_t){
-        .addr = s_addr, .last_active = time(NULL), .saved_log_length = 0};
+
+    return raft_register_peer(&s_addr);
+}
+
+void raft_seed_nodes(const raft_node_t nodes[], size_t length)
+{
+    for (size_t i = 0; i < length; ++i)
+        raft_register_node(nodes[i].ip_addr, nodes[i].port);
 }
 
 void raft_server_start(int node_id)
 {
     cm.node_id = node_id;
     char ip[IP_LENGTH];
-    get_ip_str(&cm.nodes[cm.node_id].addr, ip, IP_LENGTH);
+    get_ip_str(&cm.nodes.items[cm.node_id].addr, ip, IP_LENGTH);
     log_info("UDP listen on %s:%d", ip,
-             htons(cm.nodes[cm.node_id].addr.sin_port));
-    int sock_fd = udp_listen(ip, htons(cm.nodes[cm.node_id].addr.sin_port));
+             htons(cm.nodes.items[cm.node_id].addr.sin_port));
+    int sock_fd =
+        udp_listen(ip, htons(cm.nodes.items[cm.node_id].addr.sin_port));
 
     fd_set read_fds;
     unsigned char buf[BUFSIZ];
@@ -943,21 +1039,28 @@ void raft_server_start(int node_id)
                 log_error("recvfrom error: %s", strerror(errno));
             message_type_t message_type = raft_message_read(buf, &raft_message);
             switch (message_type) {
-            case MT_APPEND_ENTRIES_RQ:
+            case MT_GOSSIP_CLUSTER_JOIN_RPC:
+                handle_gossip_cluster_join_rpc(
+                    sock_fd, &raft_message.gossip_add_node_rpc);
+                break;
+            case MT_GOSSIP_ADD_PEER_RPC:
+                handle_gossip_add_node_rpc(&raft_message.gossip_add_node_rpc);
+                break;
+            case MT_RAFT_APPEND_ENTRIES_RPC:
                 last_update_time_us = get_microseconds_timestamp();
                 last_heartbeat_s    = get_seconds_timestamp();
                 handle_append_entries_rq(sock_fd, &peer_addr,
                                          &raft_message.append_entries_rpc);
                 break;
-            case MT_APPEND_ENTRIES_RS:
+            case MT_RAFT_APPEND_ENTRIES_REPLY:
                 handle_append_entries_rs(sock_fd, &peer_addr,
                                          &raft_message.append_entries_reply);
                 break;
-            case MT_REQUEST_VOTE_RQ:
+            case MT_RAFT_REQUEST_VOTE_RPC:
                 handle_request_vote_rq(sock_fd, &peer_addr,
                                        &raft_message.request_vote_rpc);
                 break;
-            case MT_REQUEST_VOTE_RS:
+            case MT_RAFT_REQUEST_VOTE_REPLY:
                 handle_request_vote_rs(sock_fd, &peer_addr,
                                        &raft_message.request_vote_reply);
                 if (cm.machine.state == RS_LEADER) {
