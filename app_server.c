@@ -1,4 +1,5 @@
 #include "raft.h"
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -167,14 +168,17 @@ static void server_start(int server_fd)
 
 static void *raft_start(void *arg)
 {
-    int node_id = *((int *)arg);
-    raft_server_start(node_id);
+    const struct sockaddr_in *peer = arg;
+    raft_server_start(peer);
     return NULL;
 }
 
-typedef union {
-    int node_id;
-    int port;
+typedef struct {
+    int type;
+    union {
+        int node_id;
+        int port;
+    };
 } config_t;
 
 static void print_usage(const char *prog_name)
@@ -189,9 +193,11 @@ static void parse_args(int argc, char *argv[], config_t *config)
     while ((opt = getopt(argc, argv, "n:p:")) != -1) {
         switch (opt) {
         case 'n':
+            config->type    = 0;
             config->node_id = atoi(optarg);
             break;
         case 'p':
+            config->type = 1;
             config->port = atoi(optarg);
             break;
         default:
@@ -219,11 +225,36 @@ int main(int argc, char **argv)
     raft_node_t peers[3] = {
         {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
     raft_seed_nodes(peers, 3);
+    struct sockaddr_in s_addr = {0};
+    s_addr.sin_family         = AF_INET;
 
-    pthread_create(&raft_thread, NULL, &raft_start, &config.node_id);
+    if (config.type == 0) {
+        s_addr.sin_port = htons(peers[config.node_id].port);
 
-    int server_fd =
-        tcp_listen(peers[config.node_id].ip_addr, peers[config.node_id].port);
+        if (inet_pton(AF_INET, peers[config.node_id].ip_addr,
+                      &s_addr.sin_addr) <= 0) {
+            perror("Invalid peer IP address");
+            return -1;
+        }
+    } else {
+        s_addr.sin_port = htons(config.port);
+
+        if (inet_pton(AF_INET, "127.0.0.1", &s_addr.sin_addr) <= 0) {
+            perror("Invalid peer IP address");
+            return -1;
+        }
+    }
+
+    pthread_create(&raft_thread, NULL, &raft_start, &s_addr);
+
+    int server_fd = 0;
+
+    if (config.type == 0)
+        server_fd = tcp_listen(peers[config.node_id].ip_addr,
+                               peers[config.node_id].port);
+    else
+        server_fd = tcp_listen("127.0.0.1", config.port);
+
     if (server_fd < 0)
         exit(EXIT_FAILURE);
     server_start(server_fd);

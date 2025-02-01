@@ -335,7 +335,8 @@ static void start_election(int fd);
 typedef enum raft_machine_state {
     RS_FOLLOWER,
     RS_CANDIDATE,
-    RS_LEADER
+    RS_LEADER,
+    RS_DEAD
 } raft_machine_state_t;
 
 typedef struct raft_state {
@@ -596,6 +597,7 @@ static int gossip_add_node_rpc_write(uint8_t *buf, const gossip_add_node_t *ga)
     int bytes           = write_u8(buf++, ip_addr_len);
     memcpy(buf, ga->ip_addr, ip_addr_len);
     bytes += ip_addr_len;
+    buf += ip_addr_len;
     bytes += write_i32(buf, ga->port);
     return bytes;
 }
@@ -694,6 +696,7 @@ static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
     if (cm.machine.state == RS_LEADER) {
         // TODO inefficient double translation (host str, port int) <=>
         // struct sockaddr_in
+        log_info("Cluster join request, updating followers");
         raft_register_node(an->ip_addr, an->port);
         // Forward the new node to the other nodes
         raft_message.type = MT_GOSSIP_ADD_PEER_RPC;
@@ -702,6 +705,7 @@ static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
             send_raft_message(fd, &cm.nodes.items[i].addr, &raft_message);
         }
     } else {
+        log_info("Cluster join request, forwarding to leader");
         // Forward to the raft leader
         send_raft_message(fd, &cm.nodes.items[cm.current_leader_id].addr,
                           &raft_message);
@@ -710,6 +714,8 @@ static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
 
 static void handle_gossip_add_node_rpc(const gossip_add_node_t *an)
 {
+    log_info("New node (%s:%d)joined the cluster, updating table", an->ip_addr,
+             an->port);
     raft_register_node(an->ip_addr, an->port);
 }
 
@@ -995,8 +1001,29 @@ void raft_seed_nodes(const raft_node_t nodes[], size_t length)
         raft_register_node(nodes[i].ip_addr, nodes[i].port);
 }
 
-void raft_server_start(int node_id)
+void send_join_request(int fd, const struct sockaddr_in *seed_addr,
+                       const struct sockaddr_in *peer)
 {
+    char ip[IP_LENGTH];
+    get_ip_str(peer, ip, IP_LENGTH);
+    raft_message_t raft_message = {
+        .type                = MT_GOSSIP_CLUSTER_JOIN_RPC,
+        .gossip_add_node_rpc = {.port = htons(peer->sin_port)}};
+
+    strncpy(raft_message.gossip_add_node_rpc.ip_addr, ip, IP_LENGTH);
+
+    send_raft_message(fd, seed_addr, &raft_message);
+}
+
+void raft_server_start(const struct sockaddr_in *peer)
+{
+    srand(time(NULL) ^ getpid());
+
+    int node_id = find_peer_index(peer);
+    if (node_id == -1) {
+        node_id          = raft_register_peer(peer);
+        cm.machine.state = RS_DEAD;
+    }
     cm.node_id = node_id;
     char ip[IP_LENGTH];
     get_ip_str(&cm.nodes.items[cm.node_id].addr, ip, IP_LENGTH);
@@ -1080,7 +1107,8 @@ void raft_server_start(int node_id)
         // not RS_CANDIDATE, skip it
         remaining_s = get_seconds_timestamp() - last_heartbeat_s;
 
-        if (cm.machine.state == RS_LEADER) {
+        switch (cm.machine.state) {
+        case RS_LEADER:
             // We're in RS_LEADER state,
             // sending heartbeats
             if (remaining_s >= select_timeout_s) {
@@ -1093,7 +1121,12 @@ void raft_server_start(int node_id)
                 tv.tv_usec = 0;
             }
             continue;
-        } else {
+        case RS_DEAD:
+            // Join cluster here
+            send_join_request(sock_fd, &cm.nodes.items[0].addr, peer);
+            tv.tv_sec = HEARTBEAT_TIMEOUT_S;
+            break;
+        default:
             remaining_us = get_microseconds_timestamp() - last_update_time_us;
             // We're in RS_CANDIDATE
             // state, starting an election
@@ -1110,6 +1143,7 @@ void raft_server_start(int node_id)
                     tv.tv_usec = select_timeout_us - remaining_us;
                 }
             }
+            break;
         }
     }
 }
