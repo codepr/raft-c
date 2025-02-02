@@ -14,16 +14,15 @@
 #include <time.h>
 #include <unistd.h>
 
-#define RANDOM(a, b)       rand() % ((b) + 1 - (a)) + (a)
-#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
+#define RANDOM(a, b) rand() % ((b) + 1 - (a)) + (a)
 
-#define LL_DEBUG           0
-#define LL_INFO            1
-#define LL_WARNING         2
-#define LL_ERROR           3
-#define LL_CRITICAL        4
+#define LL_DEBUG     0
+#define LL_INFO      1
+#define LL_WARNING   2
+#define LL_ERROR     3
+#define LL_CRITICAL  4
 
-#define LOG_LEVEL          LL_DEBUG
+#define LOG_LEVEL    LL_DEBUG
 
 #define RAFT_LOG(level, level_str, fmt, ...)                                   \
     do {                                                                       \
@@ -251,20 +250,23 @@ static unsigned long long get_seconds_timestamp(void)
 // Generic header to identify requests
 
 typedef enum message_type {
-    MT_GOSSIP_CLUSTER_JOIN_RPC,
-    MT_GOSSIP_ADD_PEER_RPC,
+    MT_RAFT_CLUSTER_JOIN_RPC,
+    MT_RAFT_ADD_PEER_RPC,
     MT_RAFT_REQUEST_VOTE_RPC,
     MT_RAFT_REQUEST_VOTE_REPLY,
     MT_RAFT_APPEND_ENTRIES_RPC,
     MT_RAFT_APPEND_ENTRIES_REPLY
 } message_type_t;
 
-// Gossip structs
+// RAFT dynamic node handling structs
+// Extension of the raft RPCs, originally these are not
+// part of RAFT, usually node membership is handled by
+// other kind of protocols, such as gossip.
 
 typedef struct {
     char ip_addr[IP_LENGTH];
     int port;
-} gossip_add_node_t;
+} raft_add_node_t;
 
 // RequestVoteRPC
 
@@ -304,8 +306,8 @@ typedef struct append_entries_reply {
     bool success;
 } append_entries_reply_t;
 
-static int gossip_add_node_rpc_write(uint8_t *buf, const gossip_add_node_t *ga);
-static int gossip_add_node_rpc_read(gossip_add_node_t *ga, const uint8_t *buf);
+static int add_node_rpc_write(uint8_t *buf, const raft_add_node_t *ga);
+static int add_node_rpc_read(raft_add_node_t *ga, const uint8_t *buf);
 static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv);
 static int request_vote_reply_write(uint8_t *buf,
                                     const request_vote_reply_t *rv);
@@ -323,10 +325,11 @@ static int append_entries_reply_read(append_entries_reply_t *ae,
 static void start_election(int fd);
 
 /**
- ** Raft machine State
+ ** Raft machine State, see section 5.2 of the paper for a summary
  **/
 
-#define MAX_NODES_COUNT 15
+#define MAX_NODES_COUNT    15
+#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
 
 typedef enum raft_machine_state {
     RS_FOLLOWER,
@@ -360,7 +363,7 @@ typedef struct raft_state {
 typedef struct raft_message {
     message_type_t type;
     union {
-        gossip_add_node_t gossip_add_node_rpc;
+        raft_add_node_t add_node_rpc;
         request_vote_rpc_t request_vote_rpc;
         request_vote_reply_t request_vote_reply;
         append_entries_rpc_t append_entries_rpc;
@@ -372,11 +375,11 @@ static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
 {
     ssize_t bytes = write_u8(buf++, rm->type);
     switch (rm->type) {
-    case MT_GOSSIP_CLUSTER_JOIN_RPC:
-        bytes += gossip_add_node_rpc_write(buf, &rm->gossip_add_node_rpc);
+    case MT_RAFT_CLUSTER_JOIN_RPC:
+        bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
         break;
-    case MT_GOSSIP_ADD_PEER_RPC:
-        bytes += gossip_add_node_rpc_write(buf, &rm->gossip_add_node_rpc);
+    case MT_RAFT_ADD_PEER_RPC:
+        bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
         break;
     case MT_RAFT_APPEND_ENTRIES_RPC:
         bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
@@ -399,11 +402,11 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
 {
     rm->type = read_u8(buf++);
     switch (rm->type) {
-    case MT_GOSSIP_CLUSTER_JOIN_RPC:
-        gossip_add_node_rpc_read(&rm->gossip_add_node_rpc, buf);
+    case MT_RAFT_CLUSTER_JOIN_RPC:
+        add_node_rpc_read(&rm->add_node_rpc, buf);
         break;
-    case MT_GOSSIP_ADD_PEER_RPC:
-        gossip_add_node_rpc_read(&rm->gossip_add_node_rpc, buf);
+    case MT_RAFT_ADD_PEER_RPC:
+        add_node_rpc_read(&rm->add_node_rpc, buf);
         break;
     case MT_RAFT_APPEND_ENTRIES_RPC:
         append_entries_rpc_read(&rm->append_entries_rpc, buf);
@@ -602,7 +605,7 @@ static int append_entries_reply_write(uint8_t *buf,
 
     return bytes;
 }
-static int gossip_add_node_rpc_write(uint8_t *buf, const gossip_add_node_t *ga)
+static int add_node_rpc_write(uint8_t *buf, const raft_add_node_t *ga)
 {
     uint8_t ip_addr_len = strlen(ga->ip_addr);
     int bytes           = write_u8(buf++, ip_addr_len);
@@ -613,7 +616,7 @@ static int gossip_add_node_rpc_write(uint8_t *buf, const gossip_add_node_t *ga)
     return bytes;
 }
 
-static int gossip_add_node_rpc_read(gossip_add_node_t *ga, const uint8_t *buf)
+static int add_node_rpc_read(raft_add_node_t *ga, const uint8_t *buf)
 {
     size_t ip_addr_len = read_u8(buf++);
     if (ip_addr_len > IP_LENGTH)
@@ -705,17 +708,17 @@ static void start_election(int fd)
     }
 }
 
-static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
+static void handle_cluster_join_rpc(int fd, const raft_add_node_t *an)
 {
-    raft_message_t raft_message = {.type = MT_GOSSIP_CLUSTER_JOIN_RPC,
-                                   .gossip_add_node_rpc = *an};
+    raft_message_t raft_message = {.type         = MT_RAFT_CLUSTER_JOIN_RPC,
+                                   .add_node_rpc = *an};
     if (cm.machine.state == RS_LEADER) {
         // TODO inefficient double translation (host str, port int) <=>
         // struct sockaddr_in
         log_info("Cluster join request, updating followers");
         raft_register_node(an->ip_addr, an->port);
         // Forward the new node to the other nodes
-        raft_message.type = MT_GOSSIP_ADD_PEER_RPC;
+        raft_message.type = MT_RAFT_ADD_PEER_RPC;
 
         for (int i = 0; i < cm.nodes.length; ++i) {
             send_raft_message(fd, &cm.nodes.items[i].addr, &raft_message);
@@ -728,7 +731,7 @@ static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
     }
 }
 
-static void handle_gossip_add_node_rpc(const gossip_add_node_t *an)
+static void handle_add_node_rpc(const raft_add_node_t *an)
 {
     log_info("New node (%s:%d) joined the cluster, updating table", an->ip_addr,
              an->port);
@@ -1045,10 +1048,10 @@ void send_join_request(int fd, const struct sockaddr_in *seed_addr,
     char ip[IP_LENGTH];
     get_ip_str(peer, ip, IP_LENGTH);
     raft_message_t raft_message = {
-        .type                = MT_GOSSIP_CLUSTER_JOIN_RPC,
-        .gossip_add_node_rpc = {.port = htons(peer->sin_port)}};
+        .type         = MT_RAFT_CLUSTER_JOIN_RPC,
+        .add_node_rpc = {.port = htons(peer->sin_port)}};
 
-    strncpy(raft_message.gossip_add_node_rpc.ip_addr, ip, IP_LENGTH);
+    strncpy(raft_message.add_node_rpc.ip_addr, ip, IP_LENGTH);
 
     send_raft_message(fd, seed_addr, &raft_message);
 }
@@ -1107,12 +1110,11 @@ void raft_server_start(const struct sockaddr_in *peer)
                 log_error("recvfrom error: %s", strerror(errno));
             message_type_t message_type = raft_message_read(buf, &raft_message);
             switch (message_type) {
-            case MT_GOSSIP_CLUSTER_JOIN_RPC:
-                handle_gossip_cluster_join_rpc(
-                    sock_fd, &raft_message.gossip_add_node_rpc);
+            case MT_RAFT_CLUSTER_JOIN_RPC:
+                handle_cluster_join_rpc(sock_fd, &raft_message.add_node_rpc);
                 break;
-            case MT_GOSSIP_ADD_PEER_RPC:
-                handle_gossip_add_node_rpc(&raft_message.gossip_add_node_rpc);
+            case MT_RAFT_ADD_PEER_RPC:
+                handle_add_node_rpc(&raft_message.add_node_rpc);
                 break;
             case MT_RAFT_APPEND_ENTRIES_RPC:
                 last_update_time_us = get_microseconds_timestamp();
