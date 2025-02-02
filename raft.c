@@ -328,8 +328,9 @@ static void start_election(int fd);
  ** Raft machine State, see section 5.2 of the paper for a summary
  **/
 
-#define MAX_NODES_COUNT    15
-#define ELECTION_TIMEOUT() RANDOM(150000, 300000);
+#define MAX_NODES_COUNT     15
+#define ELECTION_TIMEOUT()  RANDOM(150000, 300000);
+#define HEARTBEAT_TIMEOUT_S 1
 
 typedef enum raft_machine_state {
     RS_FOLLOWER,
@@ -1001,8 +1002,6 @@ static void broadcast_heartbeat(int fd)
         free(message.append_entries_rpc.entries.items);
 }
 
-#define HEARTBEAT_TIMEOUT_S 1
-
 static int raft_register_peer(const struct sockaddr_in *s_addr)
 {
     int node_id = -1;
@@ -1133,6 +1132,7 @@ void raft_server_start(const struct sockaddr_in *peer)
             case MT_RAFT_REQUEST_VOTE_REPLY:
                 handle_request_vote_rs(sock_fd, &peer_addr,
                                        &raft_message.request_vote_reply);
+                // Immediately send the first AppendEntriesRPC
                 if (cm.machine.state == RS_LEADER) {
                     broadcast_heartbeat(sock_fd);
                     last_heartbeat_s  = get_seconds_timestamp();
@@ -1197,6 +1197,8 @@ void raft_server_start(const struct sockaddr_in *peer)
     }
 }
 
+static raft_persistence_t *raft_storage = NULL;
+
 int raft_submit(int value)
 {
     if (cm.machine.state != RS_LEADER)
@@ -1204,7 +1206,34 @@ int raft_submit(int value)
 
     log_info("Received value %d", value);
     int submit_index  = cm.machine.log.length;
+
     log_entry_t entry = {.term = cm.machine.current_term, .value = value};
     da_append(&cm.machine.log, entry);
+
+    raft_save_state(raft_storage);
+
     return submit_index;
+}
+
+void raft_set_persistence(raft_persistence_t *backend)
+{
+    raft_storage = backend;
+}
+
+int raft_save_state(const raft_persistence_t *backend)
+{
+    // no-op backend
+    if (!backend)
+        return -1;
+
+    return backend->save_state(&cm.machine);
+}
+
+int raft_load_state(raft_persistence_t *backend)
+{
+    // no-op backend
+    if (!backend)
+        return -1;
+
+    return backend->load_state(&cm.machine);
 }
