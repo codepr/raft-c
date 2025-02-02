@@ -488,8 +488,7 @@ static void transition_to_candidate(void)
 
 static int last_log_term(void)
 {
-    log_entry_t last_entry = da_back(&cm.machine.log);
-    return cm.machine.log.length == 0 ? 0 : last_entry.term;
+    return cm.machine.log.length == 0 ? 0 : da_back(&cm.machine.log).term;
 }
 
 static int last_log_index(void) { return cm.machine.log.length - 1; }
@@ -731,7 +730,7 @@ static void handle_gossip_cluster_join_rpc(int fd, const gossip_add_node_t *an)
 
 static void handle_gossip_add_node_rpc(const gossip_add_node_t *an)
 {
-    log_info("New node (%s:%d)joined the cluster, updating table", an->ip_addr,
+    log_info("New node (%s:%d) joined the cluster, updating table", an->ip_addr,
              an->port);
     raft_register_node(an->ip_addr, an->port);
 }
@@ -774,24 +773,6 @@ static void handle_request_vote_rq(int fd, const struct sockaddr_in *peer,
                   peer->sin_addr.s_addr, strerror(errno));
 }
 
-static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
-                                   const request_vote_reply_t *rv)
-{
-    log_info("Received RequestVoteReply(term=%d, vote_granted=%d)", rv->term,
-             rv->vote_granted);
-    // Already a leader, discard vote
-    if (cm.machine.state != RS_CANDIDATE)
-        return;
-    if (rv->term > cm.machine.current_term) {
-        transition_to_follower(rv->term);
-    } else {
-        if (rv->vote_granted)
-            ++cm.votes_received;
-        if (cm.votes_received > (cm.nodes.length / 2))
-            transition_to_leader();
-    }
-}
-
 static int find_peer_index(const struct sockaddr_in *peer)
 {
     for (int i = 0; i < cm.nodes.length; ++i) {
@@ -801,6 +782,39 @@ static int find_peer_index(const struct sockaddr_in *peer)
         }
     }
     return -1;
+}
+
+#define NODE_ACTIVE_DEADLINE 3
+
+static int online_nodes(void)
+{
+    int count  = 0;
+    time_t now = time(NULL);
+    for (int i = 0; i < cm.nodes.length; ++i)
+        if (now - cm.nodes.items[i].last_active < NODE_ACTIVE_DEADLINE)
+            ++count;
+    return count;
+}
+
+static void handle_request_vote_rs(int fd, const struct sockaddr_in *peer,
+                                   const request_vote_reply_t *rv)
+{
+    log_info("Received RequestVoteReply(term=%d, vote_granted=%d)", rv->term,
+             rv->vote_granted);
+    int peer_id = find_peer_index(peer);
+    if (peer_id)
+        cm.nodes.items[peer_id].last_active = time(NULL);
+    // Already a leader, discard vote
+    if (cm.machine.state != RS_CANDIDATE)
+        return;
+    if (rv->term > cm.machine.current_term) {
+        transition_to_follower(rv->term);
+    } else {
+        if (rv->vote_granted)
+            ++cm.votes_received;
+        if (cm.votes_received > (online_nodes() / 2))
+            transition_to_leader();
+    }
 }
 
 static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
@@ -882,6 +896,7 @@ static void handle_append_entries_rq(int fd, const struct sockaddr_in *peer,
 static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
                                      const append_entries_reply_t *ae)
 {
+
     if (ae->term > cm.machine.current_term) {
         transition_to_follower(ae->term);
         return;
@@ -892,6 +907,8 @@ static void handle_append_entries_rs(int fd, const struct sockaddr_in *peer,
         log_error("Could not find peer ID for reply");
         return;
     }
+
+    cm.nodes.items[peer_id].last_active = time(NULL);
 
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
@@ -1009,7 +1026,11 @@ int raft_register_node(const char *addr, int port)
         return -1;
     }
 
-    return raft_register_peer(&s_addr);
+    int node_id = raft_register_peer(&s_addr);
+    if (node_id)
+        cm.nodes.items[node_id].last_active = time(NULL);
+
+    return node_id;
 }
 
 void raft_seed_nodes(const raft_node_t nodes[], size_t length)
@@ -1041,7 +1062,10 @@ void raft_server_start(const struct sockaddr_in *peer)
         node_id          = raft_register_peer(peer);
         cm.machine.state = RS_DEAD;
     }
-    cm.node_id = node_id;
+
+    cm.nodes.items[node_id].last_active = time(NULL);
+
+    cm.node_id                          = node_id;
     char ip[IP_LENGTH];
     get_ip_str(&cm.nodes.items[cm.node_id].addr, ip, IP_LENGTH);
     log_info("UDP listen on %s:%d", ip,
@@ -1140,8 +1164,14 @@ void raft_server_start(const struct sockaddr_in *peer)
             continue;
         case RS_DEAD:
             // Join cluster here
-            send_join_request(sock_fd, &cm.nodes.items[0].addr, peer);
-            tv.tv_sec = HEARTBEAT_TIMEOUT_S;
+            if (remaining_s >= select_timeout_s) {
+                send_join_request(sock_fd, &cm.nodes.items[0].addr, peer);
+                tv.tv_sec  = HEARTBEAT_TIMEOUT_S;
+                tv.tv_usec = 0;
+            } else {
+                tv.tv_sec  = select_timeout_s - remaining_s;
+                tv.tv_usec = 0;
+            }
             break;
         default:
             remaining_us = get_microseconds_timestamp() - last_update_time_us;
