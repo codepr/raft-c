@@ -79,11 +79,7 @@
             (da)->length++;                                                    \
     } while (0)
 
-#define da_back(da)                                                            \
-    do {                                                                       \
-        assert((da));                                                          \
-        (da)->items[(da)->length - 1];                                         \
-    } while (0)
+#define da_back(da) (da)->items[(da)->length - 1]
 
 /**
  ** Binary protocol utility functions
@@ -152,8 +148,6 @@ static int32_t read_i32(const uint8_t *buf)
  ** making it lightweight and connection-less. We're don't really care about
  ** delivery guarantee ** and the communication is simplified.
  **/
-
-#define MAX_NODES_COUNT 15
 
 static int set_nonblocking(int fd)
 {
@@ -332,6 +326,8 @@ static void start_election(int fd);
  ** Raft machine State
  **/
 
+#define MAX_NODES_COUNT 15
+
 typedef enum raft_machine_state {
     RS_FOLLOWER,
     RS_CANDIDATE,
@@ -425,6 +421,16 @@ static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
     return rm->type;
 }
 
+/**
+ ** Consensus module definition
+ ** Represents the generic global state of the cluster, tracking
+ **  - RAFT machine state
+ **  - Votes received from peers
+ **  - Connected cluster nodes
+ **  - The ID of the node
+ **  - The ID of the current RAFT leader
+ **/
+
 // Represents a peer in the Raft cluster.
 typedef struct peer {
     struct sockaddr_in addr;
@@ -482,9 +488,8 @@ static void transition_to_candidate(void)
 
 static int last_log_term(void)
 {
-    return cm.machine.log.length == 0
-               ? 0
-               : cm.machine.log.items[cm.machine.log.length - 1].term;
+    log_entry_t last_entry = da_back(&cm.machine.log);
+    return cm.machine.log.length == 0 ? 0 : last_entry.term;
 }
 
 static int last_log_index(void) { return cm.machine.log.length - 1; }
@@ -669,6 +674,11 @@ static int send_raft_message(int fd, const struct sockaddr_in *peer,
     ssize_t length      = raft_message_write(&buf[0], rm);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
+
+/**
+ ** RAFT handlers definition, the callbacks to process incoming
+ ** messages from the nodes in the cluster
+ **/
 
 static void start_election(int fd)
 {
