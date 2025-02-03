@@ -83,7 +83,7 @@ typedef enum message_type {
 typedef struct {
     char ip_addr[IP_LENGTH];
     int port;
-} raft_add_node_t;
+} add_node_rpc_t;
 
 // RequestVoteRPC
 
@@ -124,7 +124,7 @@ typedef struct append_entries_reply {
 typedef struct raft_message {
     message_type_t type;
     union {
-        raft_add_node_t add_node_rpc;
+        add_node_rpc_t add_node_rpc;
         request_vote_rpc_t request_vote_rpc;
         request_vote_reply_t request_vote_reply;
         append_entries_rpc_t append_entries_rpc;
@@ -133,7 +133,8 @@ typedef struct raft_message {
 } raft_message_t;
 
 /**
- ** RAFT message encoding interface
+ ** RAFT message encoding interface, allows for multiple serialization
+ ** types, by default it uses the binary defined in encoding.h
  **/
 
 typedef struct raft_encoding {
@@ -144,7 +145,8 @@ typedef struct raft_encoding {
 void raft_set_encoding(raft_encoding_t *backend);
 
 /**
- ** RAFT persistence interface
+ ** RAFT persistence interface, allows for multiple persistence backends, by
+ ** default it uses the file persistence backend defined in storage.h
  **/
 typedef struct raft_persistence {
     int (*save_state)(const raft_state_t *state);

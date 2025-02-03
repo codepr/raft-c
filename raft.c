@@ -1,7 +1,7 @@
 #include "raft.h"
-#include "binary.h"
 #include "darray.h"
 #include "encoding.h"
+#include "storage.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
@@ -121,70 +121,6 @@ static unsigned long long get_seconds_timestamp(void)
 #define ELECTION_TIMEOUT()  RANDOM(150000, 300000);
 #define HEARTBEAT_TIMEOUT_S 1
 
-static raft_encoding_t *raft_encoding = NULL;
-
-static ssize_t raft_encode(uint8_t *buf, const raft_message_t *rm)
-{
-    return raft_encoding->raft_message_write(buf, rm);
-}
-static message_type_t raft_decode(const uint8_t *buf, raft_message_t *rm)
-{
-    return raft_encoding->raft_message_read(buf, rm);
-}
-
-static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
-{
-    ssize_t bytes = write_u8(buf++, rm->type);
-    switch (rm->type) {
-    case MT_RAFT_CLUSTER_JOIN_RPC:
-        bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
-        break;
-    case MT_RAFT_ADD_PEER_RPC:
-        bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
-        break;
-    case MT_RAFT_APPEND_ENTRIES_RPC:
-        bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
-        break;
-    case MT_RAFT_APPEND_ENTRIES_REPLY:
-        bytes += append_entries_reply_write(buf, &rm->append_entries_reply);
-        break;
-    case MT_RAFT_REQUEST_VOTE_RPC:
-        bytes += request_vote_rpc_write(buf, &rm->request_vote_rpc);
-        break;
-    case MT_RAFT_REQUEST_VOTE_REPLY:
-        bytes += request_vote_reply_write(buf, &rm->request_vote_reply);
-        break;
-    }
-
-    return bytes;
-}
-
-static message_type_t raft_message_read(const uint8_t *buf, raft_message_t *rm)
-{
-    rm->type = read_u8(buf++);
-    switch (rm->type) {
-    case MT_RAFT_CLUSTER_JOIN_RPC:
-        add_node_rpc_read(&rm->add_node_rpc, buf);
-        break;
-    case MT_RAFT_ADD_PEER_RPC:
-        add_node_rpc_read(&rm->add_node_rpc, buf);
-        break;
-    case MT_RAFT_APPEND_ENTRIES_RPC:
-        append_entries_rpc_read(&rm->append_entries_rpc, buf);
-        break;
-    case MT_RAFT_APPEND_ENTRIES_REPLY:
-        append_entries_reply_read(&rm->append_entries_reply, buf);
-        break;
-    case MT_RAFT_REQUEST_VOTE_RPC:
-        request_vote_rpc_read(&rm->request_vote_rpc, buf);
-        break;
-    case MT_RAFT_REQUEST_VOTE_REPLY:
-        request_vote_reply_read(&rm->request_vote_reply, buf);
-        break;
-    }
-    return rm->type;
-}
-
 /**
  ** Consensus module definition
  ** Represents the generic global state of the cluster, tracking
@@ -220,7 +156,38 @@ typedef struct {
 } consensus_module_t;
 
 // Global consensus module, initializing to 0 (zero-initialization).
-static consensus_module_t cm = {0};
+static consensus_module_t cm          = {0};
+
+static raft_encoding_t *raft_encoding = NULL;
+
+static ssize_t raft_encode(uint8_t *buf, const raft_message_t *rm)
+{
+    return raft_encoding->raft_message_write(buf, rm);
+}
+static message_type_t raft_decode(const uint8_t *buf, raft_message_t *rm)
+{
+    return raft_encoding->raft_message_read(buf, rm);
+}
+
+static raft_persistence_t *raft_storage = NULL;
+
+static int raft_save_state(void)
+{
+    // no-op backend
+    if (!raft_storage)
+        return -1;
+
+    return raft_storage->save_state(&cm.machine);
+}
+
+static int raft_load_state(void)
+{
+    // no-op backend
+    if (!raft_storage)
+        return -1;
+
+    return raft_storage->load_state(&cm.machine);
+}
 
 static void transition_to_leader(void)
 {
@@ -297,7 +264,7 @@ static void start_election(int fd)
     }
 }
 
-static void handle_cluster_join_rpc(int fd, const raft_add_node_t *an)
+static void handle_cluster_join_rpc(int fd, const add_node_rpc_t *an)
 {
     raft_message_t raft_message = {.type         = MT_RAFT_CLUSTER_JOIN_RPC,
                                    .add_node_rpc = *an};
@@ -320,7 +287,7 @@ static void handle_cluster_join_rpc(int fd, const raft_add_node_t *an)
     }
 }
 
-static void handle_add_node_rpc(const raft_add_node_t *an)
+static void handle_add_node_rpc(const add_node_rpc_t *an)
 {
     log_info("New node (%s:%d) joined the cluster, updating table", an->ip_addr,
              an->port);
@@ -649,12 +616,21 @@ static int raft_load_state(void);
 void raft_server_start(const struct sockaddr_in *peer)
 {
     raft_encoding_t binary_encoder;
+    raft_persistence_t file_storage;
 
     if (!raft_encoding) {
         binary_encoder =
-            (raft_encoding_t){.raft_message_write = raft_message_write,
-                              .raft_message_read  = raft_message_read};
-        raft_encoding = &binary_encoder;
+            (raft_encoding_t){.raft_message_write = raft_bin_message_write,
+                              .raft_message_read  = raft_bin_message_read};
+        raft_set_encoding(&binary_encoder);
+    }
+
+    if (!raft_storage) {
+        file_storage = (raft_persistence_t){
+            .save_state = file_save_state,
+            .load_state = file_load_state,
+        };
+        raft_set_persistence(&file_storage);
     }
 
     raft_load_state();
@@ -704,6 +680,7 @@ void raft_server_start(const struct sockaddr_in *peer)
             log_critical("select() error: %s\n", strerror(errno));
 
         if (FD_ISSET(sock_fd, &read_fds)) {
+            // Assume a single message, long at most BUFSIZ bytes
             raft_message_t raft_message = {0};
             n                           = recvfrom(sock_fd, buf, sizeof(buf), 0,
                                                    (struct sockaddr *)&peer_addr, &addr_len);
@@ -799,31 +776,11 @@ void raft_server_start(const struct sockaddr_in *peer)
     }
 }
 
-static raft_persistence_t *raft_storage = NULL;
-
 void raft_set_encoding(raft_encoding_t *backend) { raft_encoding = backend; }
 
 void raft_set_persistence(raft_persistence_t *backend)
 {
     raft_storage = backend;
-}
-
-static int raft_save_state(void)
-{
-    // no-op backend
-    if (!raft_storage)
-        return -1;
-
-    return raft_storage->save_state(&cm.machine);
-}
-
-static int raft_load_state(void)
-{
-    // no-op backend
-    if (!raft_storage)
-        return -1;
-
-    return raft_storage->load_state(&cm.machine);
 }
 
 int raft_submit(int value)

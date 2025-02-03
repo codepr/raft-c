@@ -12,6 +12,7 @@ replicated inside the system, features:
     - Heartbeats
     - Resilient to nodes dropping out of the cluster
     - State re-applied to the new joining node
+    - State persistence
 
 ## Play
 

@@ -3,7 +3,7 @@
 #include "darray.h"
 #include <string.h>
 
-int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
+static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
 {
     // term
     int bytes = write_i32(buf, rv->term);
@@ -24,7 +24,8 @@ int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
     return bytes;
 }
 
-int request_vote_reply_write(uint8_t *buf, const request_vote_reply_t *rv)
+static int request_vote_reply_write(uint8_t *buf,
+                                    const request_vote_reply_t *rv)
 {
     // term
     int bytes = write_i32(buf, rv->term);
@@ -35,7 +36,7 @@ int request_vote_reply_write(uint8_t *buf, const request_vote_reply_t *rv)
     return bytes;
 }
 
-int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf)
+static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf)
 {
     rv->term = read_i32(buf);
     buf += sizeof(int32_t);
@@ -52,7 +53,7 @@ int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf)
     return 0;
 }
 
-int request_vote_reply_read(request_vote_reply_t *rv, const uint8_t *buf)
+static int request_vote_reply_read(request_vote_reply_t *rv, const uint8_t *buf)
 {
     rv->term = read_i32(buf);
     buf += sizeof(int32_t);
@@ -60,7 +61,8 @@ int request_vote_reply_read(request_vote_reply_t *rv, const uint8_t *buf)
     return 0;
 }
 
-int append_entries_rpc_write(uint8_t *buf, const append_entries_rpc_t *ae)
+static int append_entries_rpc_write(uint8_t *buf,
+                                    const append_entries_rpc_t *ae)
 {
     // term
     int bytes = write_i32(buf, ae->term);
@@ -99,7 +101,8 @@ int append_entries_rpc_write(uint8_t *buf, const append_entries_rpc_t *ae)
     return bytes;
 }
 
-int append_entries_reply_write(uint8_t *buf, const append_entries_reply_t *ae)
+static int append_entries_reply_write(uint8_t *buf,
+                                      const append_entries_reply_t *ae)
 {
     // term
     int bytes = write_i32(buf, ae->term);
@@ -109,7 +112,7 @@ int append_entries_reply_write(uint8_t *buf, const append_entries_reply_t *ae)
 
     return bytes;
 }
-int add_node_rpc_write(uint8_t *buf, const raft_add_node_t *ga)
+static int add_node_rpc_write(uint8_t *buf, const add_node_rpc_t *ga)
 {
     uint8_t ip_addr_len = strlen(ga->ip_addr);
     int bytes           = write_u8(buf++, ip_addr_len);
@@ -120,7 +123,7 @@ int add_node_rpc_write(uint8_t *buf, const raft_add_node_t *ga)
     return bytes;
 }
 
-int add_node_rpc_read(raft_add_node_t *ga, const uint8_t *buf)
+static int add_node_rpc_read(add_node_rpc_t *ga, const uint8_t *buf)
 {
     size_t ip_addr_len = read_u8(buf++);
     if (ip_addr_len > IP_LENGTH)
@@ -131,7 +134,7 @@ int add_node_rpc_read(raft_add_node_t *ga, const uint8_t *buf)
     return 0;
 }
 
-int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
+static int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
 {
     ae->term = read_i32(buf);
     buf += sizeof(int32_t);
@@ -163,10 +166,64 @@ int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
     return 0;
 }
 
-int append_entries_reply_read(append_entries_reply_t *ae, const uint8_t *buf)
+static int append_entries_reply_read(append_entries_reply_t *ae,
+                                     const uint8_t *buf)
 {
     ae->term = read_i32(buf);
     buf += sizeof(int32_t);
     ae->success = read_u8(buf++);
     return 0;
+}
+
+ssize_t raft_bin_message_write(uint8_t *buf, const raft_message_t *rm)
+{
+    ssize_t bytes = write_u8(buf++, rm->type);
+    switch (rm->type) {
+    case MT_RAFT_CLUSTER_JOIN_RPC:
+        bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
+        break;
+    case MT_RAFT_ADD_PEER_RPC:
+        bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
+        break;
+    case MT_RAFT_APPEND_ENTRIES_RPC:
+        bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
+        break;
+    case MT_RAFT_APPEND_ENTRIES_REPLY:
+        bytes += append_entries_reply_write(buf, &rm->append_entries_reply);
+        break;
+    case MT_RAFT_REQUEST_VOTE_RPC:
+        bytes += request_vote_rpc_write(buf, &rm->request_vote_rpc);
+        break;
+    case MT_RAFT_REQUEST_VOTE_REPLY:
+        bytes += request_vote_reply_write(buf, &rm->request_vote_reply);
+        break;
+    }
+
+    return bytes;
+}
+
+message_type_t raft_bin_message_read(const uint8_t *buf, raft_message_t *rm)
+{
+    rm->type = read_u8(buf++);
+    switch (rm->type) {
+    case MT_RAFT_CLUSTER_JOIN_RPC:
+        add_node_rpc_read(&rm->add_node_rpc, buf);
+        break;
+    case MT_RAFT_ADD_PEER_RPC:
+        add_node_rpc_read(&rm->add_node_rpc, buf);
+        break;
+    case MT_RAFT_APPEND_ENTRIES_RPC:
+        append_entries_rpc_read(&rm->append_entries_rpc, buf);
+        break;
+    case MT_RAFT_APPEND_ENTRIES_REPLY:
+        append_entries_reply_read(&rm->append_entries_reply, buf);
+        break;
+    case MT_RAFT_REQUEST_VOTE_RPC:
+        request_vote_rpc_read(&rm->request_vote_rpc, buf);
+        break;
+    case MT_RAFT_REQUEST_VOTE_REPLY:
+        request_vote_reply_read(&rm->request_vote_reply, buf);
+        break;
+    }
+    return rm->type;
 }
