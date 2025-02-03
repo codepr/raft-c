@@ -1,3 +1,5 @@
+#include "binary.h"
+#include "darray.h"
 #include "raft.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -211,6 +213,46 @@ static void parse_args(int argc, char *argv[], config_t *config)
     }
 }
 
+int file_save_state(const raft_state_t *state)
+{
+    FILE *file = fopen("raft_state.bin", "wb");
+    if (!file)
+        return -1;
+
+    // TODO placeholder size
+    uint8_t buf[BUFSIZ];
+    uint8_t *ptr   = &buf[0];
+    ssize_t length = write_i32(ptr, state->current_term);
+    ptr += sizeof(int32_t);
+    length += write_i32(ptr, state->voted_for);
+    ptr += sizeof(int32_t);
+    fwrite(buf, length, 1, file);
+    fclose(file);
+    return 0;
+}
+
+int file_load_state(raft_state_t *state)
+{
+    FILE *file = fopen("raft_state.bin", "rb");
+    if (!file)
+        return -1;
+
+    log_info("Restoring raft state from disk");
+    // TODO placeholder size
+    uint8_t buf[BUFSIZ];
+    fread(buf, sizeof(buf), 1, file);
+    fclose(file);
+    uint8_t *ptr        = &buf[0];
+    state->current_term = read_i32(ptr);
+    ptr += sizeof(int32_t);
+    state->voted_for = read_i32(ptr);
+
+    return 0;
+}
+
+raft_persistence_t file_backend = {.save_state = file_save_state,
+                                   .load_state = file_load_state};
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -219,6 +261,8 @@ int main(int argc, char **argv)
     config_t config = {-1};
 
     parse_args(argc, argv, &config);
+
+    raft_set_persistence(&file_backend);
 
     pthread_t raft_thread;
 

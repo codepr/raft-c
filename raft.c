@@ -1,4 +1,7 @@
 #include "raft.h"
+#include "binary.h"
+#include "darray.h"
+#include "encoding.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
@@ -15,130 +18,6 @@
 #include <unistd.h>
 
 #define RANDOM(a, b) rand() % ((b) + 1 - (a)) + (a)
-
-#define LL_DEBUG     0
-#define LL_INFO      1
-#define LL_WARNING   2
-#define LL_ERROR     3
-#define LL_CRITICAL  4
-
-#define LOG_LEVEL    LL_DEBUG
-
-#define RAFT_LOG(level, level_str, fmt, ...)                                   \
-    do {                                                                       \
-        if (level >= LOG_LEVEL) {                                              \
-            fprintf(stderr, "[%s] " fmt "%s",                                  \
-                    level_str __VA_OPT__(, ) __VA_ARGS__, "\n");               \
-        }                                                                      \
-        if (level == LL_CRITICAL)                                              \
-            exit(EXIT_FAILURE);                                                \
-    } while (0)
-
-#define log_debug(fmt, ...)                                                    \
-    RAFT_LOG(LL_DEBUG, "DEBUG", fmt __VA_OPT__(, ) __VA_ARGS__)
-#define log_info(fmt, ...)                                                     \
-    RAFT_LOG(LL_INFO, "INFO", fmt __VA_OPT__(, ) __VA_ARGS__)
-#define log_warning(fmt, ...)                                                  \
-    RAFT_LOG(LL_WARNING, "WARNING", fmt __VA_OPT__(, ) __VA_ARGS__)
-#define log_error(fmt, ...)                                                    \
-    RAFT_LOG(LL_ERROR, "ERROR", fmt __VA_OPT__(, ) __VA_ARGS__)
-#define log_critical(fmt, ...)                                                 \
-    RAFT_LOG(LL_CRITICAL, "CRITICAL", fmt __VA_OPT__(, ) __VA_ARGS__)
-
-/**
- ** Dynamic array utility macros
- **/
-
-#define da_extend(da)                                                          \
-    do {                                                                       \
-        (da)->capacity += 1;                                                   \
-        (da)->capacity *= 2;                                                   \
-        (da)->items =                                                          \
-            realloc((da)->items, (da)->capacity * sizeof(*(da)->items));       \
-        if (!(da)->items) {                                                    \
-            log_critical("DA realloc failed");                                 \
-        }                                                                      \
-    } while (0)
-
-#define da_append(da, item)                                                    \
-    do {                                                                       \
-        assert((da));                                                          \
-        if ((da)->length + 1 >= (da)->capacity)                                \
-            da_extend((da));                                                   \
-        (da)->items[(da)->length++] = (item);                                  \
-    } while (0)
-
-#define da_insert(da, i, item)                                                 \
-    do {                                                                       \
-        assert((da));                                                          \
-        if ((i) >= (da)->length)                                               \
-            da_extend((da));                                                   \
-        (da)->items[i] = (item);                                               \
-        if ((i) >= (da)->length)                                               \
-            (da)->length++;                                                    \
-    } while (0)
-
-#define da_back(da) (da)->items[(da)->length - 1]
-
-/**
- ** Binary protocol utility functions
- **
- ** A simple binary protocol to communicate over the wire. The RPC calls
- ** are pretty simple and easy to serialize.
- **/
-
-static int write_u8(uint8_t *buf, uint8_t val)
-{
-    *buf++ = val;
-    return sizeof(uint8_t);
-}
-
-static uint8_t read_u8(const uint8_t *const buf) { return ((uint8_t)*buf); }
-
-// write_u32() -- store a 32-bit int into a char buffer (like htonl())
-static int write_u32(uint8_t *buf, uint32_t val)
-{
-    *buf++ = val >> 24;
-    *buf++ = val >> 16;
-    *buf++ = val >> 8;
-    *buf++ = val;
-
-    return sizeof(uint32_t);
-}
-
-// read_u32() -- unpack a 32-bit unsigned from a char buffer (like ntohl())
-static uint32_t read_u32(const uint8_t *const buf)
-{
-    return ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
-           ((uint32_t)buf[2] << 8) | buf[3];
-}
-
-// write_i32() -- store a 32-bit int into a char buffer (like htonl())
-static int write_i32(uint8_t *buf, int32_t val)
-{
-    *buf++ = val >> 24;
-    *buf++ = val >> 16;
-    *buf++ = val >> 8;
-    *buf++ = val;
-
-    return sizeof(int32_t);
-}
-
-// read_i32() -- unpack a 32-bit int from a char buffer (like ntohl())
-static int32_t read_i32(const uint8_t *buf)
-{
-    uint32_t i2 = ((int64_t)buf[0] << 24) | ((int64_t)buf[1] << 16) |
-                  ((int64_t)buf[2] << 8) | buf[3];
-    int32_t val;
-
-    // change unsigned numbers to signed
-    if (i2 <= 0x7fffffffu)
-        val = i2;
-    else
-        val = -1 - (int64_t)(0xffffffffu - i2);
-
-    return val;
-}
 
 /**
  ** Cluster communication and management - UDP network utility functions
@@ -236,141 +115,22 @@ static unsigned long long get_seconds_timestamp(void)
 }
 
 /**
- ** RPC structure definition
- **
- ** - RequestVoteRPC     used when an election starts
- ** - RequestVoteReply   reply to a RequestVoteRPC with the vote to elect a
- **                      leader
- ** - AppendEntriesRPC   Used for both heartbeats (empty, coming from the leader
- **                      to prevent elections, and to keep the log up to date in
- **                      the cluster)
- ** - AppendEntriesReply reply to an AppendEntriesRPC
- **/
-
-// Generic header to identify requests
-
-typedef enum message_type {
-    MT_RAFT_CLUSTER_JOIN_RPC,
-    MT_RAFT_ADD_PEER_RPC,
-    MT_RAFT_REQUEST_VOTE_RPC,
-    MT_RAFT_REQUEST_VOTE_REPLY,
-    MT_RAFT_APPEND_ENTRIES_RPC,
-    MT_RAFT_APPEND_ENTRIES_REPLY
-} message_type_t;
-
-// RAFT dynamic node handling structs
-// Extension of the raft RPCs, originally these are not
-// part of RAFT, usually node membership is handled by
-// other kind of protocols, such as gossip.
-
-typedef struct {
-    char ip_addr[IP_LENGTH];
-    int port;
-} raft_add_node_t;
-
-// RequestVoteRPC
-
-typedef struct request_vote_rpc {
-    int term;
-    int candidate_id;
-    int last_log_term;
-    int last_log_index;
-} request_vote_rpc_t;
-
-typedef struct request_vote_reply {
-    int term;
-    bool vote_granted;
-} request_vote_reply_t;
-
-typedef struct log_entry {
-    int term;
-    int value;
-} log_entry_t;
-
-// AppendEntrierRPC
-typedef struct append_entries_rpc {
-    int term;
-    int leader_id;
-    int prev_log_term;
-    int prev_log_index;
-    int leader_commit;
-    struct {
-        size_t length;
-        size_t capacity;
-        log_entry_t *items;
-    } entries;
-} append_entries_rpc_t;
-
-typedef struct append_entries_reply {
-    int term;
-    bool success;
-} append_entries_reply_t;
-
-static int add_node_rpc_write(uint8_t *buf, const raft_add_node_t *ga);
-static int add_node_rpc_read(raft_add_node_t *ga, const uint8_t *buf);
-static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv);
-static int request_vote_reply_write(uint8_t *buf,
-                                    const request_vote_reply_t *rv);
-static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf);
-static int request_vote_reply_read(request_vote_reply_t *rv,
-                                   const uint8_t *buf);
-static int append_entries_rpc_write(uint8_t *buf,
-                                    const append_entries_rpc_t *ae);
-static int append_entries_reply_write(uint8_t *buf,
-                                      const append_entries_reply_t *ae);
-static int append_entries_rpc_read(append_entries_rpc_t *ae,
-                                   const uint8_t *buf);
-static int append_entries_reply_read(append_entries_reply_t *ae,
-                                     const uint8_t *buf);
-static void start_election(int fd);
-
-/**
  ** Raft machine State, see section 5.2 of the paper for a summary
  **/
 
-#define MAX_NODES_COUNT     15
 #define ELECTION_TIMEOUT()  RANDOM(150000, 300000);
 #define HEARTBEAT_TIMEOUT_S 1
 
-typedef enum raft_machine_state {
-    RS_FOLLOWER,
-    RS_CANDIDATE,
-    RS_LEADER,
-    RS_DEAD
-} raft_machine_state_t;
+static raft_encoding_t *raft_encoding = NULL;
 
-typedef struct raft_state {
-    raft_machine_state_t state;
-    int current_term;
-    int voted_for;
-    struct {
-        size_t length;
-        size_t capacity;
-        log_entry_t *items;
-    } log;
-    struct {
-        int commit_index;
-        int last_applied;
-    } state_volatile;
-    struct {
-        int next_index[MAX_NODES_COUNT];
-        int match_index[MAX_NODES_COUNT];
-    } leader_volatile;
-} raft_state_t;
-
-// Simple wrapper for a generic RAFT
-// message
-
-typedef struct raft_message {
-    message_type_t type;
-    union {
-        raft_add_node_t add_node_rpc;
-        request_vote_rpc_t request_vote_rpc;
-        request_vote_reply_t request_vote_reply;
-        append_entries_rpc_t append_entries_rpc;
-        append_entries_reply_t append_entries_reply;
-    };
-} raft_message_t;
+static ssize_t raft_encode(uint8_t *buf, const raft_message_t *rm)
+{
+    return raft_encoding->raft_message_write(buf, rm);
+}
+static message_type_t raft_decode(const uint8_t *buf, raft_message_t *rm)
+{
+    return raft_encoding->raft_message_read(buf, rm);
+}
 
 static ssize_t raft_message_write(uint8_t *buf, const raft_message_t *rm)
 {
@@ -497,184 +257,12 @@ static int last_log_term(void)
 
 static int last_log_index(void) { return cm.machine.log.length - 1; }
 
-static int request_vote_rpc_write(uint8_t *buf, const request_vote_rpc_t *rv)
-{
-    // term
-    int bytes = write_i32(buf, rv->term);
-    buf += sizeof(int32_t);
-
-    // candidate_id
-    bytes += write_i32(buf, rv->candidate_id);
-    buf += sizeof(int32_t);
-
-    // last_log_term
-    bytes += write_i32(buf, rv->last_log_term);
-    buf += sizeof(int32_t);
-
-    // last_log_index
-    bytes += write_i32(buf, rv->last_log_index);
-    buf += sizeof(int32_t);
-
-    return bytes;
-}
-
-static int request_vote_reply_write(uint8_t *buf,
-                                    const request_vote_reply_t *rv)
-{
-    // term
-    int bytes = write_i32(buf, rv->term);
-    buf += sizeof(int32_t);
-
-    bytes += write_u8(buf++, rv->vote_granted);
-
-    return bytes;
-}
-
-static int request_vote_rpc_read(request_vote_rpc_t *rv, const uint8_t *buf)
-{
-    rv->term = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    rv->candidate_id = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    rv->last_log_term = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    rv->last_log_index = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    return 0;
-}
-
-static int request_vote_reply_read(request_vote_reply_t *rv, const uint8_t *buf)
-{
-    rv->term = read_i32(buf);
-    buf += sizeof(int32_t);
-    rv->vote_granted = read_u8(buf++);
-    return 0;
-}
-
-static int append_entries_rpc_write(uint8_t *buf,
-                                    const append_entries_rpc_t *ae)
-{
-    // term
-    int bytes = write_i32(buf, ae->term);
-    buf += sizeof(int32_t);
-
-    // leader_id
-    bytes += write_i32(buf, ae->leader_id);
-    buf += sizeof(int32_t);
-
-    // prev_log_term
-    bytes += write_i32(buf, ae->prev_log_term);
-    buf += sizeof(int32_t);
-
-    // prev_log_index
-    bytes += write_i32(buf, ae->prev_log_index);
-    buf += sizeof(int32_t);
-
-    // leader_commit
-    bytes += write_i32(buf, ae->leader_commit);
-    buf += sizeof(int32_t);
-
-    if (ae->entries.capacity) {
-        // entries count
-        bytes += write_u32(buf, ae->entries.length);
-        buf += sizeof(uint32_t);
-
-        // entries
-        for (size_t i = 0; i < ae->entries.length; ++i) {
-            bytes += write_i32(buf, ae->entries.items[i].term);
-            buf += sizeof(int32_t);
-            bytes += write_i32(buf, ae->entries.items[i].value);
-            buf += sizeof(int32_t);
-        }
-    }
-
-    return bytes;
-}
-
-static int append_entries_reply_write(uint8_t *buf,
-                                      const append_entries_reply_t *ae)
-{
-    // term
-    int bytes = write_i32(buf, ae->term);
-    buf += sizeof(int32_t);
-
-    bytes += write_u8(buf++, ae->success);
-
-    return bytes;
-}
-static int add_node_rpc_write(uint8_t *buf, const raft_add_node_t *ga)
-{
-    uint8_t ip_addr_len = strlen(ga->ip_addr);
-    int bytes           = write_u8(buf++, ip_addr_len);
-    memcpy(buf, ga->ip_addr, ip_addr_len);
-    bytes += ip_addr_len;
-    buf += ip_addr_len;
-    bytes += write_i32(buf, ga->port);
-    return bytes;
-}
-
-static int add_node_rpc_read(raft_add_node_t *ga, const uint8_t *buf)
-{
-    size_t ip_addr_len = read_u8(buf++);
-    if (ip_addr_len > IP_LENGTH)
-        return -1;
-    strncpy(ga->ip_addr, (char *)buf, ip_addr_len);
-    buf += ip_addr_len;
-    ga->port = read_i32(buf);
-    return 0;
-}
-
-static int append_entries_rpc_read(append_entries_rpc_t *ae, const uint8_t *buf)
-{
-    ae->term = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    ae->leader_id = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    ae->prev_log_term = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    ae->prev_log_index = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    ae->leader_commit = read_i32(buf);
-    buf += sizeof(int32_t);
-
-    uint32_t entries_count = read_u32(buf);
-    buf += sizeof(uint32_t);
-
-    for (int i = 0; i < entries_count; ++i) {
-        log_entry_t entry;
-        entry.term = read_i32(buf);
-        buf += sizeof(int32_t);
-        entry.value = read_i32(buf);
-        buf += sizeof(int32_t);
-        da_append(&ae->entries, entry);
-    }
-
-    return 0;
-}
-
-static int append_entries_reply_read(append_entries_reply_t *ae,
-                                     const uint8_t *buf)
-{
-    ae->term = read_i32(buf);
-    buf += sizeof(int32_t);
-    ae->success = read_u8(buf++);
-    return 0;
-}
-
 static int send_raft_message(int fd, const struct sockaddr_in *peer,
                              const raft_message_t *rm)
 {
     uint8_t buf[BUFSIZ] = {0};
 
-    ssize_t length      = raft_message_write(&buf[0], rm);
+    ssize_t length      = raft_encode(&buf[0], rm);
     return sendto(fd, buf, length, 0, (struct sockaddr *)peer, sizeof(*peer));
 }
 
@@ -1055,8 +643,22 @@ void send_join_request(int fd, const struct sockaddr_in *seed_addr,
     send_raft_message(fd, seed_addr, &raft_message);
 }
 
+static int raft_save_state(void);
+static int raft_load_state(void);
+
 void raft_server_start(const struct sockaddr_in *peer)
 {
+    raft_encoding_t binary_encoder;
+
+    if (!raft_encoding) {
+        binary_encoder =
+            (raft_encoding_t){.raft_message_write = raft_message_write,
+                              .raft_message_read  = raft_message_read};
+        raft_encoding = &binary_encoder;
+    }
+
+    raft_load_state();
+
     srand(time(NULL) ^ getpid());
 
     int node_id = find_peer_index(peer);
@@ -1107,7 +709,7 @@ void raft_server_start(const struct sockaddr_in *peer)
                                                    (struct sockaddr *)&peer_addr, &addr_len);
             if (n < 0)
                 log_error("recvfrom error: %s", strerror(errno));
-            message_type_t message_type = raft_message_read(buf, &raft_message);
+            message_type_t message_type = raft_decode(buf, &raft_message);
             switch (message_type) {
             case MT_RAFT_CLUSTER_JOIN_RPC:
                 handle_cluster_join_rpc(sock_fd, &raft_message.add_node_rpc);
@@ -1199,6 +801,31 @@ void raft_server_start(const struct sockaddr_in *peer)
 
 static raft_persistence_t *raft_storage = NULL;
 
+void raft_set_encoding(raft_encoding_t *backend) { raft_encoding = backend; }
+
+void raft_set_persistence(raft_persistence_t *backend)
+{
+    raft_storage = backend;
+}
+
+static int raft_save_state(void)
+{
+    // no-op backend
+    if (!raft_storage)
+        return -1;
+
+    return raft_storage->save_state(&cm.machine);
+}
+
+static int raft_load_state(void)
+{
+    // no-op backend
+    if (!raft_storage)
+        return -1;
+
+    return raft_storage->load_state(&cm.machine);
+}
+
 int raft_submit(int value)
 {
     if (cm.machine.state != RS_LEADER)
@@ -1210,30 +837,7 @@ int raft_submit(int value)
     log_entry_t entry = {.term = cm.machine.current_term, .value = value};
     da_append(&cm.machine.log, entry);
 
-    raft_save_state(raft_storage);
+    raft_save_state();
 
     return submit_index;
-}
-
-void raft_set_persistence(raft_persistence_t *backend)
-{
-    raft_storage = backend;
-}
-
-int raft_save_state(const raft_persistence_t *backend)
-{
-    // no-op backend
-    if (!backend)
-        return -1;
-
-    return backend->save_state(&cm.machine);
-}
-
-int raft_load_state(raft_persistence_t *backend)
-{
-    // no-op backend
-    if (!backend)
-        return -1;
-
-    return backend->load_state(&cm.machine);
 }

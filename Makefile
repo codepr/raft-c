@@ -11,11 +11,11 @@ CFLAGS=-Wall \
 	   -Wno-gnu-zero-variadic-macro-arguments
 LDFLAGS = -L. -lraft
 
-RAFT_C_SRC = raft.c app_server.c
+RAFT_C_SRC = binary.c encoding.c raft.c app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
 
-LIB_SOURCES = raft.c
+LIB_SOURCES = binary.c encoding.c raft.c
 LIB_OBJECTS = $(LIB_SOURCES:.c=.o)
 
 all: $(RAFT_C_EXEC)

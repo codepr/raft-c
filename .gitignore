@@ -15,3 +15,5 @@
 *.dSYM/
 *.su
 raft-c
+.clang-tidy
+raft_state.*
