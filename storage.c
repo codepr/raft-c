@@ -5,6 +5,7 @@
 
 int file_save_state(const raft_state_t *state)
 {
+    // TODO move hardcoded filepath out
     FILE *file = fopen("raft_state.bin", "wb");
     if (!file)
         return -1;
@@ -31,11 +32,11 @@ int file_save_state(const raft_state_t *state)
 
 int file_load_state(raft_state_t *state)
 {
+    // TODO move hardcoded filepath out
     FILE *file = fopen("raft_state.bin", "rb");
     if (!file)
         return -1;
 
-    log_info("Restoring raft state from disk");
     // TODO placeholder size
     uint8_t buf[BUFSIZ];
     fread(buf, sizeof(buf), 1, file);

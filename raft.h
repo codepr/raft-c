@@ -69,6 +69,7 @@ void raft_server_start(const struct sockaddr_in *peer);
 typedef enum message_type {
     MT_RAFT_CLUSTER_JOIN_RPC,
     MT_RAFT_ADD_PEER_RPC,
+    MT_RAFT_FORWARD_VALUE_RPC,
     MT_RAFT_REQUEST_VOTE_RPC,
     MT_RAFT_REQUEST_VOTE_REPLY,
     MT_RAFT_APPEND_ENTRIES_RPC,
@@ -118,6 +119,10 @@ typedef struct append_entries_reply {
     bool success;
 } append_entries_reply_t;
 
+typedef struct forward_value_rpc {
+    int value;
+} forward_value_rpc_t;
+
 // Simple wrapper for a generic RAFT
 // message
 
@@ -125,6 +130,7 @@ typedef struct raft_message {
     message_type_t type;
     union {
         add_node_rpc_t add_node_rpc;
+        forward_value_rpc_t forward_value_rpc;
         request_vote_rpc_t request_vote_rpc;
         request_vote_reply_t request_vote_reply;
         append_entries_rpc_t append_entries_rpc;

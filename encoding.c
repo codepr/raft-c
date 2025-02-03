@@ -175,6 +175,20 @@ static int append_entries_reply_read(append_entries_reply_t *ae,
     return 0;
 }
 
+static int forward_value_rpc_write(uint8_t *buf, const forward_value_rpc_t *fv)
+{
+    int bytes = write_i32(buf, fv->value);
+    buf += sizeof(int32_t);
+    return bytes;
+}
+
+static int forward_value_rpc_read(forward_value_rpc_t *fv, const uint8_t *buf)
+{
+    fv->value = read_i32(buf);
+    buf += sizeof(int32_t);
+    return 0;
+}
+
 ssize_t raft_bin_message_write(uint8_t *buf, const raft_message_t *rm)
 {
     ssize_t bytes = write_u8(buf++, rm->type);
@@ -184,6 +198,9 @@ ssize_t raft_bin_message_write(uint8_t *buf, const raft_message_t *rm)
         break;
     case MT_RAFT_ADD_PEER_RPC:
         bytes += add_node_rpc_write(buf, &rm->add_node_rpc);
+        break;
+    case MT_RAFT_FORWARD_VALUE_RPC:
+        bytes += forward_value_rpc_write(buf, &rm->forward_value_rpc);
         break;
     case MT_RAFT_APPEND_ENTRIES_RPC:
         bytes += append_entries_rpc_write(buf, &rm->append_entries_rpc);
@@ -211,6 +228,9 @@ message_type_t raft_bin_message_read(const uint8_t *buf, raft_message_t *rm)
         break;
     case MT_RAFT_ADD_PEER_RPC:
         add_node_rpc_read(&rm->add_node_rpc, buf);
+        break;
+    case MT_RAFT_FORWARD_VALUE_RPC:
+        forward_value_rpc_read(&rm->forward_value_rpc, buf);
         break;
     case MT_RAFT_APPEND_ENTRIES_RPC:
         append_entries_rpc_read(&rm->append_entries_rpc, buf);
