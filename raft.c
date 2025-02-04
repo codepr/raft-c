@@ -1,6 +1,7 @@
 #include "raft.h"
 #include "darray.h"
 #include "encoding.h"
+#include "hashring.h"
 #include "storage.h"
 #include <arpa/inet.h>
 #include <assert.h>
@@ -817,4 +818,10 @@ int raft_submit(int value)
     raft_save_state();
 
     return submit_index;
+}
+
+int raft_submit_sharded(const char *key, int value)
+{
+    hashring_payload_t payload = {.data = &value, .size = sizeof(int)};
+    return hashring_submit(key, &payload);
 }
