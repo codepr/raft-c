@@ -106,6 +106,13 @@ int hashring_submit(const char *key, const hashring_payload_t *payload)
 {
     uint32_t shard_id      = hashring_lookup(key);
     raft_node_t *raft_node = &ring.nodes[shard_id];
+    raft_node_t this_node  = raft_this();
+
+    if (this_node.port == raft_node->port &&
+        strncmp(this_node.ip_addr, raft_node->ip_addr, IP_LENGTH) == 0) {
+        raft_submit(*(int *)payload->data);
+        return 0;
+    }
 
     return ring.transport.send_data(raft_node, payload->data, payload->size);
 }

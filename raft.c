@@ -839,3 +839,13 @@ int raft_node_from_string(const char *str, raft_node_t *node)
 
     return 0;
 }
+
+raft_node_t raft_this(void)
+{
+    struct sockaddr_in *this = &cm.nodes.items[cm.node_id].addr;
+    char ip[IP_LENGTH];
+    get_ip_str(this, ip, IP_LENGTH);
+    raft_node_t node = {.port = htons(this->sin_port)};
+    strncpy(node.ip_addr, ip, IP_LENGTH);
+    return node;
+}
