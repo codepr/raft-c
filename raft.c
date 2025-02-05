@@ -825,3 +825,17 @@ int raft_submit_sharded(const char *key, int value)
     hashring_payload_t payload = {.data = &value, .size = sizeof(int)};
     return hashring_submit(key, &payload);
 }
+
+int raft_node_from_string(const char *str, raft_node_t *node)
+{
+    if (!str || !node)
+        return -1;
+
+    char *ptr   = (char *)str;
+    char *token = strtok(ptr, ":");
+    strncpy(node->ip_addr, token, IP_LENGTH);
+    token      = strtok(NULL, "\0");
+    node->port = atoi(token);
+
+    return 0;
+}

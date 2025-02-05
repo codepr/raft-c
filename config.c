@@ -1,0 +1,157 @@
+#include "config.h"
+#include "darray.h"
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define BUCKET_SIZE       128
+
+// Default config table
+#define HOST              "127.0.0.1:8777"
+#define SHARD_LEADERS     "127.0.0.1:8777 127.0.0.1:8877 127.0.0.1:8977"
+#define RAFT_REPLICAS     "2"
+#define RAFT_HEARTBEAT_MS "150"
+
+static config_entry_t *config_map[BUCKET_SIZE];
+
+// Simple hash function for string keys
+static unsigned int hash(const char *key)
+{
+    unsigned int h = 0;
+    while (*key)
+        h = (h * 31) + *(key++);
+    return h % BUCKET_SIZE;
+}
+
+void config_set(const char *key, const char *value)
+{
+    unsigned index        = hash(key);
+    config_entry_t *entry = malloc(sizeof(*entry));
+    if (!entry)
+        return;
+
+    strncpy(entry->key, key, MAX_KEY_SIZE);
+    strncpy(entry->value, value, MAX_VALUE_SIZE);
+    entry->next       = config_map[index];
+    config_map[index] = entry;
+}
+
+void config_set_default(void)
+{
+    config_set("host", HOST);
+    config_set("shard_leaders", SHARD_LEADERS);
+    config_set("raft_replicas", RAFT_REPLICAS);
+    config_set("raft_heartbeat_ms", RAFT_HEARTBEAT_MS);
+}
+
+const char *config_get(const char *key)
+{
+    unsigned index        = hash(key);
+    config_entry_t *entry = config_map[index];
+
+    while (entry) {
+        if (strncmp(entry->key, key, MAX_KEY_SIZE) == 0)
+            return entry->value;
+        entry = entry->next;
+    }
+
+    return NULL;
+}
+
+int config_get_int(const char *key)
+{
+    const char *value = config_get(key);
+    if (!value)
+        return -1;
+
+    return atoi(key);
+}
+
+int config_get_list(const char *key, char out[MAX_LIST_SIZE][MAX_VALUE_SIZE])
+{
+    const char *list = config_get(key);
+    if (!list)
+        return -1;
+
+    int count = 0;
+    char item[MAX_VALUE_SIZE];
+    strncpy(item, list, MAX_VALUE_SIZE);
+
+    for (char *token = strtok(item, " "); token && count < MAX_LIST_SIZE;
+         token       = strtok(NULL, " "), count++) {
+        strncpy(out[count], token, MAX_VALUE_SIZE);
+        token = strtok(NULL, " ");
+    }
+
+    return count;
+}
+
+static int scan_delim(const char *ptr, char *buf, char delim)
+{
+    int size = 0;
+    while (*ptr != delim && *ptr != '\0') {
+        *buf++ = *ptr++;
+        ++size;
+    }
+
+    return size;
+}
+
+int config_load(const char *filepath)
+{
+    int off     = 0;
+    int line_nr = 0;
+    FILE *fp    = fopen(filepath, "r");
+    if (!fp)
+        return -1;
+
+    char line[MAX_LINE_SIZE] = {0};
+
+    while (fgets(line, sizeof(line), fp)) {
+        line_nr++;
+        char *ptr = line;
+
+        // Skip spaces and comments
+        while (isspace(*ptr))
+            ptr++;
+        if (*ptr == '#' || *ptr == '\0')
+            continue;
+
+        char key[MAX_KEY_SIZE]     = {0};
+        char value[MAX_VALUE_SIZE] = {0};
+        off                        = scan_delim(ptr, key, ' ');
+        off                        = scan_delim(ptr + off, value, '\0');
+
+        if (off != 0)
+            config_set(key, value);
+        else
+            log_error("Error reading config at line %d", line_nr);
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+void config_print(void)
+{
+    for (int i = 0; i < BUCKET_SIZE; ++i) {
+        for (config_entry_t *entry = config_map[i]; entry;
+             entry                 = entry->next) {
+            log_info("\t%s %s", entry->key, entry->value);
+        }
+    }
+}
+
+void config_free()
+{
+    for (int i = 0; i < BUCKET_SIZE; i++) {
+        config_entry_t *entry = config_map[i];
+        while (entry) {
+            config_entry_t *temp = entry;
+            entry                = entry->next;
+            free(temp);
+        }
+        config_map[i] = NULL;
+    }
+}

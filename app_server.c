@@ -1,6 +1,5 @@
-#include "binary.h"
-#include "darray.h"
 #include "raft.h"
+#include "config.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -217,6 +216,11 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
         exit(EXIT_FAILURE);
+
+    config_set_default();
+    config_print();
+    config_free();
+
 
     config_t config = {-1};
 
