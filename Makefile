@@ -11,7 +11,7 @@ CFLAGS=-Wall \
 	   -Wno-gnu-zero-variadic-macro-arguments
 LDFLAGS = -L. -lraft
 
-RAFT_C_SRC = config.c binary.c storage.c encoding.c hashring.c raft.c app_server.c
+RAFT_C_SRC = config.c binary.c storage.c encoding.c cluster.c raft.c app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
 

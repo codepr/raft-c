@@ -1,5 +1,6 @@
-#include "raft.h"
+#include "cluster.h"
 #include "config.h"
+#include "raft.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -221,24 +222,23 @@ int main(int argc, char **argv)
     config_print();
     config_free();
 
-
     config_t config = {-1};
 
     parse_args(argc, argv, &config);
 
     pthread_t raft_thread;
 
-    raft_node_t peers[3] = {
+    cluster_node_t peers[3] = {
         {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
-    raft_seed_nodes(peers, 3);
+    cluster_init(peers, 3, 1);
     struct sockaddr_in s_addr = {0};
     s_addr.sin_family         = AF_INET;
 
     if (config.type == 0) {
         s_addr.sin_port = htons(peers[config.node_id].port);
 
-        if (inet_pton(AF_INET, peers[config.node_id].ip_addr,
-                      &s_addr.sin_addr) <= 0) {
+        if (inet_pton(AF_INET, peers[config.node_id].ip, &s_addr.sin_addr) <=
+            0) {
             perror("Invalid peer IP address");
             return -1;
         }
@@ -256,8 +256,8 @@ int main(int argc, char **argv)
     int server_fd = 0;
 
     if (config.type == 0)
-        server_fd = tcp_listen(peers[config.node_id].ip_addr,
-                               peers[config.node_id].port);
+        server_fd =
+            tcp_listen(peers[config.node_id].ip, peers[config.node_id].port);
     else
         server_fd = tcp_listen("127.0.0.1", config.port);
 

@@ -1,7 +1,6 @@
 #include "raft.h"
 #include "darray.h"
 #include "encoding.h"
-#include "hashring.h"
 #include "storage.h"
 #include <arpa/inet.h>
 #include <assert.h>
@@ -598,12 +597,6 @@ int raft_register_node(const char *addr, int port)
     return node_id;
 }
 
-void raft_seed_nodes(const raft_node_t nodes[], size_t length)
-{
-    for (size_t i = 0; i < length; ++i)
-        raft_register_node(nodes[i].ip_addr, nodes[i].port);
-}
-
 void send_join_request(int fd, const struct sockaddr_in *seed_addr,
                        const struct sockaddr_in *peer)
 {
@@ -818,34 +811,4 @@ int raft_submit(int value)
     raft_save_state();
 
     return submit_index;
-}
-
-int raft_submit_sharded(const char *key, int value)
-{
-    hashring_payload_t payload = {.data = &value, .size = sizeof(int)};
-    return hashring_submit(key, &payload);
-}
-
-int raft_node_from_string(const char *str, raft_node_t *node)
-{
-    if (!str || !node)
-        return -1;
-
-    char *ptr   = (char *)str;
-    char *token = strtok(ptr, ":");
-    strncpy(node->ip_addr, token, IP_LENGTH);
-    token      = strtok(NULL, "\0");
-    node->port = atoi(token);
-
-    return 0;
-}
-
-raft_node_t raft_this(void)
-{
-    struct sockaddr_in *this = &cm.nodes.items[cm.node_id].addr;
-    char ip[IP_LENGTH];
-    get_ip_str(this, ip, IP_LENGTH);
-    raft_node_t node = {.port = htons(this->sin_port)};
-    strncpy(node.ip_addr, ip, IP_LENGTH);
-    return node;
 }
