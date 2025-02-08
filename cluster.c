@@ -11,33 +11,6 @@
 // Global hashring, initializing to 0 (zero-initialization).
 static cluster_t cluster = {0};
 
-// Global UDP socket
-static int sock_fd       = -1;
-
-// static ssize_t udp_send(const cluster_node_t *dest,
-//                         const cluster_payload_t *payload)
-// {
-//     struct sockaddr_in shard_addr = {0};
-//     shard_addr.sin_family         = AF_INET;
-//     shard_addr.sin_port           = htons(dest->port);
-//
-//     if (inet_pton(AF_INET, dest->ip, &shard_addr.sin_addr) <= 0) {
-//         perror("Invalid peer IP address");
-//         return -1;
-//     }
-//
-//     if (sock_fd == -1) {
-//         sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-//         if (sock_fd < 0) {
-//             perror("Failed to create UDP socket");
-//             return -1;
-//         }
-//     }
-//
-//     return sendto(sock_fd, payload->data, payload->size, 0,
-//                   (struct sockaddr *)&shard_addr, sizeof(shard_addr));
-// }
-
 static int set_nonblocking(int fd)
 {
     int flags, result;
@@ -52,7 +25,7 @@ static int set_nonblocking(int fd)
     return 0;
 }
 
-static int tcp_connect(const char *host, int port, int nonblocking)
+static int tcp_connect(const cluster_node_t *node, int nonblocking)
 {
 
     int s, retval = -1;
@@ -62,9 +35,9 @@ static int tcp_connect(const char *host, int port, int nonblocking)
                                    .ai_flags    = AI_PASSIVE};
 
     char port_string[6];
-    snprintf(port_string, sizeof(port_string), "%d", port);
+    snprintf(port_string, sizeof(port_string), "%d", node->port);
 
-    if (getaddrinfo(host, port_string, &hints, &servinfo) != 0)
+    if (getaddrinfo(node->ip, port_string, &hints, &servinfo) != 0)
         return -1;
 
     for (p = servinfo; p != NULL; p = p->ai_next) {
@@ -101,19 +74,18 @@ err:
     return -1;
 }
 
-static ssize_t tcp_send(const cluster_node_t *dest,
-                        const cluster_payload_t *payload)
+static ssize_t tcp_send(const cluster_node_t *node,
+                        const cluster_message_t *message)
 {
-    if (sock_fd == -1)
-        sock_fd = tcp_connect(dest->ip, dest->port, 0);
-    return send(sock_fd, payload->data, payload->size, 0);
+    return send(node->sock_fd, message->payload.data, message->payload.size, 0);
 }
 
-static void tcp_close(void)
+static void tcp_close(cluster_node_t *node)
 {
-    if (sock_fd < 0)
+    if (node->sock_fd < 0)
         return;
-    close(sock_fd);
+    close(node->sock_fd);
+    node->sock_fd = -1;
 }
 
 typedef struct {
@@ -209,14 +181,14 @@ static void *raft_start(void *arg)
     return NULL;
 }
 
-void cluster_node_start(const cluster_node_t nodes[], size_t num_nodes,
-                        const cluster_node_t replicas[], size_t num_replicas,
-                        int id, node_type_t node_type)
+void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
+                   const cluster_node_t replicas[], size_t num_replicas, int id,
+                   node_type_t node_type)
 {
     if (node_type == NODE_MAIN) {
-        cluster.node_id = id;
-        cluster.transport =
-            (cluster_transport_t){.send_data = tcp_send, .close = tcp_close};
+        cluster.node_id   = id;
+        cluster.transport = (cluster_transport_t){
+            .connect = tcp_connect, .send_data = tcp_send, .close = tcp_close};
 
         for (size_t i = 0; i < num_nodes; ++i) {
             strncpy(cluster.nodes[i].ip, nodes[i].ip, IP_LENGTH);
@@ -242,22 +214,23 @@ void cluster_node_start(const cluster_node_t nodes[], size_t num_nodes,
     cluster.is_running = true;
 }
 
-void cluster_node_stop(void)
+void cluster_stop(void)
 {
-    cluster.transport.close();
+    for (size_t i = 0; i < cluster.num_nodes; ++i)
+        cluster.transport.close(&cluster.nodes[i]);
     pthread_join(raft_thread, NULL);
     cluster.is_running = false;
 }
 
-int cluster_submit(const char *key, const cluster_payload_t *payload)
+int cluster_submit(const char *key, const cluster_message_t *message)
 {
     cluster_node_t *node = hashring_lookup(key);
     cluster_node_t *this = &cluster.nodes[cluster.node_id];
     if (strncmp(node->ip, this->ip, IP_LENGTH) == 0 &&
         node->port == this->port) {
-        raft_submit(*(int *)payload->data);
+        raft_submit(*(int *)message->payload.data);
         return 0;
     }
 
-    return cluster.transport.send_data(node, payload);
+    return cluster.transport.send_data(node, message);
 }
