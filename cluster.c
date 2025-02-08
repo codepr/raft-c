@@ -1,6 +1,8 @@
 #include "cluster.h"
 #include "raft.h"
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -12,31 +14,102 @@ static cluster_t cluster = {0};
 // Global UDP socket
 static int sock_fd       = -1;
 
-static ssize_t udp_send(const cluster_node_t *dest,
-                        const cluster_payload_t *payload)
+// static ssize_t udp_send(const cluster_node_t *dest,
+//                         const cluster_payload_t *payload)
+// {
+//     struct sockaddr_in shard_addr = {0};
+//     shard_addr.sin_family         = AF_INET;
+//     shard_addr.sin_port           = htons(dest->port);
+//
+//     if (inet_pton(AF_INET, dest->ip, &shard_addr.sin_addr) <= 0) {
+//         perror("Invalid peer IP address");
+//         return -1;
+//     }
+//
+//     if (sock_fd == -1) {
+//         sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
+//         if (sock_fd < 0) {
+//             perror("Failed to create UDP socket");
+//             return -1;
+//         }
+//     }
+//
+//     return sendto(sock_fd, payload->data, payload->size, 0,
+//                   (struct sockaddr *)&shard_addr, sizeof(shard_addr));
+// }
+
+static int set_nonblocking(int fd)
 {
-    struct sockaddr_in shard_addr = {0};
-    shard_addr.sin_family         = AF_INET;
-    shard_addr.sin_port           = htons(dest->port);
-
-    if (inet_pton(AF_INET, dest->ip, &shard_addr.sin_addr) <= 0) {
-        perror("Invalid peer IP address");
+    int flags, result;
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1)
         return -1;
-    }
 
-    if (sock_fd == -1) {
-        sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (sock_fd < 0) {
-            perror("Failed to create UDP socket");
-            return -1;
-        }
-    }
+    result = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (result == -1)
+        return -1;
 
-    return sendto(sock_fd, payload->data, payload->size, 0,
-                  (struct sockaddr *)&shard_addr, sizeof(shard_addr));
+    return 0;
 }
 
-static void udp_close(void)
+static int tcp_connect(const char *host, int port, int nonblocking)
+{
+
+    int s, retval = -1;
+    struct addrinfo *servinfo, *p;
+    const struct addrinfo hints = {.ai_family   = AF_UNSPEC,
+                                   .ai_socktype = SOCK_STREAM,
+                                   .ai_flags    = AI_PASSIVE};
+
+    char port_string[6];
+    snprintf(port_string, sizeof(port_string), "%d", port);
+
+    if (getaddrinfo(host, port_string, &hints, &servinfo) != 0)
+        return -1;
+
+    for (p = servinfo; p != NULL; p = p->ai_next) {
+        /* Try to create the socket and to connect it.
+         * If we fail in the socket() call, or on connect(), we retry with
+         * the next entry in servinfo. */
+        if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+            continue;
+
+        /* Try to connect. */
+        if (connect(s, p->ai_addr, p->ai_addrlen) == -1) {
+            close(s);
+            break;
+        }
+
+        /* If we ended an iteration of the for loop without errors, we
+         * have a connected socket. Let's return to the caller. */
+        retval = s;
+        break;
+    }
+
+    // Set now non-blocking so it's possible to block on the connect and have a
+    // ready-to-write socket immediately
+    if (nonblocking && set_nonblocking(retval) < 0)
+        goto err;
+
+    freeaddrinfo(servinfo);
+    return retval; /* Will be -1 if no connection succeded. */
+
+err:
+
+    close(s);
+    perror("socket(2) opening socket failed");
+    return -1;
+}
+
+static ssize_t tcp_send(const cluster_node_t *dest,
+                        const cluster_payload_t *payload)
+{
+    if (sock_fd == -1)
+        sock_fd = tcp_connect(dest->ip, dest->port, 0);
+    return send(sock_fd, payload->data, payload->size, 0);
+}
+
+static void tcp_close(void)
 {
     if (sock_fd < 0)
         return;
@@ -126,22 +199,55 @@ int cluster_node_from_string(const char *str, cluster_node_t *node)
     return 0;
 }
 
-void cluster_init(const cluster_node_t nodes[], size_t length, int node_id)
+static pthread_t raft_thread;
+static struct sockaddr_in raft_addr = {0};
+
+static void *raft_start(void *arg)
 {
-    cluster.node_id = node_id;
-    cluster.transport =
-        (cluster_transport_t){.send_data = udp_send, .close = udp_close};
-
-    for (size_t i = 0; i < length; ++i) {
-        strncpy(cluster.nodes[i].ip, nodes[i].ip, IP_LENGTH);
-        cluster.nodes[i].port = nodes[i].port;
-        raft_register_node(nodes[i].ip, nodes[i].port);
-    }
-
-    hashring_init(nodes, length);
+    const struct sockaddr_in *peer = arg;
+    raft_server_start(peer);
+    return NULL;
 }
 
-void cluster_deinit(void) { cluster.transport.close(); }
+void cluster_node_start(const cluster_node_t nodes[], size_t num_nodes,
+                        const cluster_node_t replicas[], size_t num_replicas,
+                        int id, node_type_t node_type)
+{
+    if (node_type == NODE_MAIN) {
+        cluster.node_id = id;
+        cluster.transport =
+            (cluster_transport_t){.send_data = tcp_send, .close = tcp_close};
+
+        for (size_t i = 0; i < num_nodes; ++i) {
+            strncpy(cluster.nodes[i].ip, nodes[i].ip, IP_LENGTH);
+            cluster.nodes[i].port = nodes[i].port;
+        }
+
+        hashring_init(nodes, num_nodes);
+    }
+
+    // Start raft replicas
+    raft_addr.sin_family = AF_INET;
+    raft_addr.sin_port   = htons(replicas[0].port);
+
+    if (inet_pton(AF_INET, replicas[0].ip, &raft_addr.sin_addr) <= 0) {
+        perror("Invalid peer IP address");
+        return;
+    }
+
+    for (size_t i = 0; i < num_replicas; ++i)
+        raft_register_node(replicas[i].ip, replicas[i].port);
+
+    pthread_create(&raft_thread, NULL, &raft_start, &raft_addr);
+    cluster.is_running = true;
+}
+
+void cluster_node_stop(void)
+{
+    cluster.transport.close();
+    pthread_join(raft_thread, NULL);
+    cluster.is_running = false;
+}
 
 int cluster_submit(const char *key, const cluster_payload_t *payload)
 {

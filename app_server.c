@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -168,15 +167,9 @@ static void server_start(int server_fd)
     }
 }
 
-static void *raft_start(void *arg)
-{
-    const struct sockaddr_in *peer = arg;
-    raft_server_start(peer);
-    return NULL;
-}
-
 typedef struct {
     int type;
+    node_type_t node_type;
     union {
         int node_id;
         int port;
@@ -192,7 +185,7 @@ static void print_usage(const char *prog_name)
 static void parse_args(int argc, char *argv[], config_t *config)
 {
     int opt;
-    while ((opt = getopt(argc, argv, "n:p:")) != -1) {
+    while ((opt = getopt(argc, argv, "n:p:t:")) != -1) {
         switch (opt) {
         case 'n':
             config->type    = 0;
@@ -201,6 +194,12 @@ static void parse_args(int argc, char *argv[], config_t *config)
         case 'p':
             config->type = 1;
             config->port = atoi(optarg);
+            break;
+        case 't':
+            if (strncasecmp(optarg, "main", 4) == 0)
+                config->type = NODE_MAIN;
+            else if (strncasecmp(optarg, "replica", 7) == 0)
+                config->type = NODE_REPLICA;
             break;
         default:
             print_usage(argv[0]);
@@ -226,32 +225,11 @@ int main(int argc, char **argv)
 
     parse_args(argc, argv, &config);
 
-    pthread_t raft_thread;
-
     cluster_node_t peers[3] = {
         {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
-    cluster_init(peers, 3, 1);
-    struct sockaddr_in s_addr = {0};
-    s_addr.sin_family         = AF_INET;
-
-    if (config.type == 0) {
-        s_addr.sin_port = htons(peers[config.node_id].port);
-
-        if (inet_pton(AF_INET, peers[config.node_id].ip, &s_addr.sin_addr) <=
-            0) {
-            perror("Invalid peer IP address");
-            return -1;
-        }
-    } else {
-        s_addr.sin_port = htons(config.port);
-
-        if (inet_pton(AF_INET, "127.0.0.1", &s_addr.sin_addr) <= 0) {
-            perror("Invalid peer IP address");
-            return -1;
-        }
-    }
-
-    pthread_create(&raft_thread, NULL, &raft_start, &s_addr);
+    cluster_node_t replicas[3] = {
+        {"127.0.0.1", 18777}, {"127.0.0.1", 18778}, {"127.0.0.1", 18779}};
+    cluster_node_start(peers, 3, replicas, 3, config.node_id, config.node_type);
 
     int server_fd = 0;
 
@@ -264,5 +242,4 @@ int main(int argc, char **argv)
     if (server_fd < 0)
         exit(EXIT_FAILURE);
     server_start(server_fd);
-    pthread_join(raft_thread, NULL);
 }
