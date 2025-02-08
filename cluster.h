@@ -46,7 +46,7 @@ typedef struct {
 int cluster_node_from_string(const char *str, cluster_node_t *node);
 void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
-                   node_type_t node_type);
+                   const char *store, node_type_t node_type);
 void cluster_stop(void);
 int cluster_submit(const char *key, const cluster_message_t *message);
 

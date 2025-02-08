@@ -229,7 +229,8 @@ int main(int argc, char **argv)
         {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
     cluster_node_t replicas[3] = {
         {"127.0.0.1", 18777}, {"127.0.0.1", 18778}, {"127.0.0.1", 18779}};
-    cluster_start(peers, 3, replicas, 3, config.node_id, config.node_type);
+    cluster_start(peers, 3, replicas, 3, config.node_id, "raft_state.bin",
+                  config.node_type);
 
     int server_fd = 0;
 

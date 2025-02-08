@@ -3,11 +3,33 @@
 #include "darray.h"
 #include <stdio.h>
 
-int file_save_state(const raft_state_t *state)
+int file_open(void *context)
 {
-    // TODO move hardcoded filepath out
-    FILE *file = fopen("raft_state.bin", "wb");
-    if (!file)
+    file_context_t *fcontext = context;
+
+    fcontext->fp             = fopen(fcontext->path, "wb");
+    if (!fcontext->fp)
+        return -1;
+
+    return 0;
+}
+
+int file_close(void *context)
+{
+    file_context_t *fcontext = context;
+    if (!fcontext->fp)
+        return -1;
+
+    fclose(fcontext->fp);
+    fcontext->fp = NULL;
+
+    return 0;
+}
+
+int file_save_state(void *context, const raft_state_t *state)
+{
+    file_context_t *fcontext = context;
+    if (!fcontext->fp)
         return -1;
 
     // TODO placeholder size
@@ -25,22 +47,19 @@ int file_save_state(const raft_state_t *state)
         length += write_i32(ptr, state->log.items[i].value);
         ptr += sizeof(int32_t);
     }
-    fwrite(buf, length, 1, file);
-    fclose(file);
+    fwrite(buf, length, 1, fcontext->fp);
     return 0;
 }
 
-int file_load_state(raft_state_t *state)
+int file_load_state(void *context, raft_state_t *state)
 {
-    // TODO move hardcoded filepath out
-    FILE *file = fopen("raft_state.bin", "rb");
-    if (!file)
+    file_context_t *fcontext = context;
+    if (!fcontext->fp)
         return -1;
 
     // TODO placeholder size
     uint8_t buf[BUFSIZ];
-    fread(buf, sizeof(buf), 1, file);
-    fclose(file);
+    fread(buf, sizeof(buf), 1, fcontext->fp);
     uint8_t *ptr        = &buf[0];
     state->current_term = read_i32(ptr);
     ptr += sizeof(int32_t);

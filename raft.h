@@ -46,7 +46,7 @@ typedef struct raft_state {
 int raft_register_node(const char *addr, int port);
 int raft_submit(int value);
 int raft_submit_sharded(const char *key, int value);
-void raft_server_start(const struct sockaddr_in *peer);
+void raft_server_start(const struct sockaddr_in *peer, const char *store);
 
 /**
  ** RPC structure definition
@@ -150,10 +150,12 @@ void raft_set_encoding(raft_encoding_t *backend);
  ** default it uses the file persistence backend defined in storage.h
  **/
 typedef struct raft_persistence {
-    int (*save_state)(const raft_state_t *state);
-    int (*load_state)(raft_state_t *state);
+    int (*open_store)(void *context);
+    int (*close_store)(void *context);
+    int (*save_state)(void *context, const raft_state_t *state);
+    int (*load_state)(void *context, raft_state_t *state);
 } raft_persistence_t;
 
-void raft_set_persistence(raft_persistence_t *backend);
+void raft_set_persistence(void *context, raft_persistence_t *backend);
 
 #endif

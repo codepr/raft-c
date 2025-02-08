@@ -174,16 +174,21 @@ int cluster_node_from_string(const char *str, cluster_node_t *node)
 static pthread_t raft_thread;
 static struct sockaddr_in raft_addr = {0};
 
+struct raft_opts {
+    const struct sockaddr_in saddr;
+    char store[BUFSIZ];
+};
+
 static void *raft_start(void *arg)
 {
-    const struct sockaddr_in *peer = arg;
-    raft_server_start(peer);
+    const struct raft_opts *opts = arg;
+    raft_server_start(&opts->saddr, opts->store);
     return NULL;
 }
 
 void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
-                   node_type_t node_type)
+                   const char *store, node_type_t node_type)
 {
     if (node_type == NODE_MAIN) {
         cluster.node_id   = id;
@@ -210,7 +215,9 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
     for (size_t i = 0; i < num_replicas; ++i)
         raft_register_node(replicas[i].ip, replicas[i].port);
 
-    pthread_create(&raft_thread, NULL, &raft_start, &raft_addr);
+    struct raft_opts opts = {.saddr = raft_addr};
+    strncmp(opts.store, store, BUFSIZ);
+    pthread_create(&raft_thread, NULL, &raft_start, &opts);
     cluster.is_running = true;
 }
 

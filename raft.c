@@ -154,6 +154,7 @@ typedef struct {
     int node_id;
     int current_leader_id;
     int sock_fd;
+    void *storage;
 } consensus_module_t;
 
 // Global consensus module, initializing to 0 (zero-initialization).
@@ -171,7 +172,9 @@ static message_type_t raft_decode(const uint8_t *buf, raft_message_t *rm)
     return raft_encoding->raft_message_read(buf, rm);
 }
 
-static raft_persistence_t *raft_storage = NULL;
+static raft_persistence_t *raft_storage  = NULL;
+
+static file_context_t file_store_context = {0};
 
 static int raft_save_state(void)
 {
@@ -179,7 +182,21 @@ static int raft_save_state(void)
     if (!raft_storage)
         return -1;
 
-    return raft_storage->save_state(&cm.machine);
+    return raft_storage->save_state(&cm.storage, &cm.machine);
+}
+
+static int raft_open_store(void)
+{
+    if (!raft_storage)
+        return -1;
+    return raft_storage->open_store(&cm.storage);
+}
+
+static int raft_close_store(void)
+{
+    if (!raft_storage)
+        return -1;
+    return raft_storage->close_store(&cm.storage);
 }
 
 static int raft_load_state(void)
@@ -188,7 +205,7 @@ static int raft_load_state(void)
     if (!raft_storage)
         return -1;
 
-    return raft_storage->load_state(&cm.machine);
+    return raft_storage->load_state(&cm.storage, &cm.machine);
 }
 
 static void transition_to_leader(void)
@@ -611,10 +628,7 @@ void send_join_request(int fd, const struct sockaddr_in *seed_addr,
     send_raft_message(fd, seed_addr, &raft_message);
 }
 
-static int raft_save_state(void);
-static int raft_load_state(void);
-
-void raft_server_start(const struct sockaddr_in *peer)
+void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
 {
     raft_encoding_t binary_encoder;
     raft_persistence_t file_storage;
@@ -628,11 +642,18 @@ void raft_server_start(const struct sockaddr_in *peer)
 
     if (!raft_storage) {
         file_storage = (raft_persistence_t){
-            .save_state = file_save_state,
-            .load_state = file_load_state,
+            .open_store  = file_open,
+            .close_store = file_close,
+            .save_state  = file_save_state,
+            .load_state  = file_load_state,
         };
-        raft_set_persistence(&file_storage);
+
+        strncmp(file_store_context.path, store_dest, BUFSIZ);
+        raft_set_persistence(&file_store_context, &file_storage);
     }
+
+    if (raft_open_store() < 0)
+        log_error("Error opening store");
 
     if (raft_load_state())
         log_info("Restoring raft state from disk");
@@ -781,12 +802,15 @@ void raft_server_start(const struct sockaddr_in *peer)
             break;
         }
     }
+    // TODO unreachable, fix this
+    raft_close_store();
 }
 
 void raft_set_encoding(raft_encoding_t *backend) { raft_encoding = backend; }
 
-void raft_set_persistence(raft_persistence_t *backend)
+void raft_set_persistence(void *context, raft_persistence_t *backend)
 {
+    cm.storage   = context;
     raft_storage = backend;
 }
 
