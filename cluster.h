@@ -1,6 +1,7 @@
 #ifndef CLUSTER_H
 #define CLUSTER_H
 
+#include "config.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,7 +45,7 @@ typedef struct {
 int cluster_node_from_string(const char *str, cluster_node_t *node);
 void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
-                   const char *store);
+                   const char *store, node_type_t type);
 void cluster_stop(void);
 int cluster_submit(const char *key, const cluster_message_t *message);
 

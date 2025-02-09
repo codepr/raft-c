@@ -232,7 +232,7 @@ int main(int argc, char **argv)
     node_id = config.node_id >= 0 ? config.node_id : config_get_int("id");
 
     cluster_start(nodes, nodes_num, replicas, replicas_num, node_id,
-                  "raft_state.bin");
+                  "raft_state.bin", config_get_enum("type"));
 
     int server_fd       = 0;
     cluster_node_t this = {0};

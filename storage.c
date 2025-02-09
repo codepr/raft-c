@@ -59,7 +59,10 @@ int file_load_state(void *context, raft_state_t *state)
 
     // TODO placeholder size
     uint8_t buf[BUFSIZ];
-    fread(buf, sizeof(buf), 1, fcontext->fp);
+    ssize_t n = fread(buf, sizeof(buf), 1, fcontext->fp);
+    if (n <= 0)
+        return -1;
+
     uint8_t *ptr        = &buf[0];
     state->current_term = read_i32(ptr);
     ptr += sizeof(int32_t);

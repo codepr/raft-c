@@ -9,6 +9,7 @@
 
 // Default config table
 #define ID                "0"
+#define TYPE              "shard"
 #define HOST              "127.0.0.1:8777"
 #define SHARD_LEADERS     "127.0.0.1:8777 127.0.0.1:8877 127.0.0.1:8977"
 #define RAFT_REPLICAS     "127.0.0.1:9777 127.0.0.1:9778"
@@ -48,6 +49,7 @@ void config_set(const char *key, const char *value)
 void config_set_default(void)
 {
     config_set("id", ID);
+    config_set("type", TYPE);
     config_set("host", HOST);
     config_set("shard_leaders", SHARD_LEADERS);
     config_set("raft_replicas", RAFT_REPLICAS);
@@ -74,7 +76,7 @@ int config_get_int(const char *key)
     if (!value)
         return -1;
 
-    return atoi(key);
+    return atoi(value);
 }
 
 int config_get_list(const char *key, char out[MAX_LIST_SIZE][MAX_VALUE_SIZE])
@@ -93,6 +95,19 @@ int config_get_list(const char *key, char out[MAX_LIST_SIZE][MAX_VALUE_SIZE])
     }
 
     return count;
+}
+
+int config_get_enum(const char *key)
+{
+    const char *value = config_get(key);
+    if (!value)
+        return -1;
+
+    if (strncasecmp(value, "shard", MAX_VALUE_SIZE) == 0)
+        return NT_SHARD;
+    if (strncasecmp(value, "replica", MAX_VALUE_SIZE) == 0)
+        return NT_REPLICA;
+    return -1;
 }
 
 static int scan_delim(const char *ptr, char *buf, char delim)

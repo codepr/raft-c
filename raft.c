@@ -189,7 +189,7 @@ static int raft_open_store(void)
 {
     if (!raft_storage)
         return -1;
-    return raft_storage->open_store(cm.storage, "r+w");
+    return raft_storage->open_store(cm.storage, "a+b");
 }
 
 static int raft_close_store(void)

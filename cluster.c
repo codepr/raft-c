@@ -172,10 +172,9 @@ int cluster_node_from_string(const char *str, cluster_node_t *node)
 }
 
 static pthread_t raft_thread;
-static struct sockaddr_in raft_addr = {0};
 
 struct raft_opts {
-    const struct sockaddr_in saddr;
+    struct sockaddr_in saddr;
     char store[BUFSIZ];
 };
 
@@ -190,7 +189,7 @@ static void *raft_start(void *arg)
 
 void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
-                   const char *store)
+                   const char *store, node_type_t type)
 {
     cluster.node_id   = id;
     cluster.transport = (cluster_transport_t){
@@ -201,22 +200,25 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
         cluster.nodes[i].port = nodes[i].port;
     }
 
+    for (size_t i = 0; i < num_replicas; ++i)
+        raft_register_node(replicas[i].ip, replicas[i].port);
+
     hashring_init(nodes, num_nodes);
+    struct raft_opts opts = {0};
+    opts.saddr.sin_family = AF_INET;
+    strncpy(opts.store, store, BUFSIZ);
+
+    const cluster_node_t *raft_node =
+        type == NT_SHARD ? &nodes[id] : &replicas[id];
 
     // Start raft replicas
-    raft_addr.sin_family = AF_INET;
-    raft_addr.sin_port   = htons(replicas[0].port);
+    opts.saddr.sin_port = htons(raft_node->port);
 
-    if (inet_pton(AF_INET, replicas[0].ip, &raft_addr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, raft_node->ip, &opts.saddr.sin_addr) <= 0) {
         perror("Invalid peer IP address");
         return;
     }
 
-    for (size_t i = 0; i < num_replicas; ++i)
-        raft_register_node(replicas[i].ip, replicas[i].port);
-
-    struct raft_opts opts = {.saddr = raft_addr};
-    strncpy(opts.store, store, BUFSIZ);
     pthread_create(&raft_thread, NULL, &raft_start, &opts);
     cluster.is_running = true;
 }
