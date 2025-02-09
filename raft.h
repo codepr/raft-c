@@ -150,7 +150,7 @@ void raft_set_encoding(raft_encoding_t *backend);
  ** default it uses the file persistence backend defined in storage.h
  **/
 typedef struct raft_persistence {
-    int (*open_store)(void *context);
+    int (*open_store)(void *context, const char *mode);
     int (*close_store)(void *context);
     int (*save_state)(void *context, const raft_state_t *state);
     int (*load_state)(void *context, raft_state_t *state);

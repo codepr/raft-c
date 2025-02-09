@@ -8,12 +8,13 @@
 #define BUCKET_SIZE       128
 
 // Default config table
+#define ID                "0"
 #define HOST              "127.0.0.1:8777"
 #define SHARD_LEADERS     "127.0.0.1:8777 127.0.0.1:8877 127.0.0.1:8977"
-#define RAFT_REPLICAS     "2"
+#define RAFT_REPLICAS     "127.0.0.1:9777 127.0.0.1:9778"
 #define RAFT_HEARTBEAT_MS "150"
 
-static config_entry_t *config_map[BUCKET_SIZE];
+static config_entry_t *config_map[BUCKET_SIZE] = {0};
 
 // Simple hash function for string keys
 static unsigned int hash(const char *key)
@@ -27,18 +28,26 @@ static unsigned int hash(const char *key)
 void config_set(const char *key, const char *value)
 {
     unsigned index        = hash(key);
-    config_entry_t *entry = malloc(sizeof(*entry));
+    config_entry_t *entry = calloc(1, sizeof(*entry));
     if (!entry)
         return;
 
     strncpy(entry->key, key, MAX_KEY_SIZE);
     strncpy(entry->value, value, MAX_VALUE_SIZE);
-    entry->next       = config_map[index];
-    config_map[index] = entry;
+
+    if (config_map[index] &&
+        strncmp(config_map[index]->key, key, MAX_KEY_SIZE) == 0) {
+        free(config_map[index]);
+        config_map[index] = entry;
+    } else {
+        entry->next       = config_map[index];
+        config_map[index] = entry;
+    }
 }
 
 void config_set_default(void)
 {
+    config_set("id", ID);
     config_set("host", HOST);
     config_set("shard_leaders", SHARD_LEADERS);
     config_set("raft_replicas", RAFT_REPLICAS);
@@ -81,7 +90,6 @@ int config_get_list(const char *key, char out[MAX_LIST_SIZE][MAX_VALUE_SIZE])
     for (char *token = strtok(item, " "); token && count < MAX_LIST_SIZE;
          token       = strtok(NULL, " "), count++) {
         strncpy(out[count], token, MAX_VALUE_SIZE);
-        token = strtok(NULL, " ");
     }
 
     return count;
@@ -121,7 +129,14 @@ int config_load(const char *filepath)
         char key[MAX_KEY_SIZE]     = {0};
         char value[MAX_VALUE_SIZE] = {0};
         off                        = scan_delim(ptr, key, ' ');
-        off                        = scan_delim(ptr + off, value, '\0');
+
+        ptr += off;
+
+        // Skip spaces and comments
+        while (isspace(*ptr))
+            ptr++;
+
+        off = scan_delim(ptr, value, '\n');
 
         if (off != 0)
             config_set(key, value);

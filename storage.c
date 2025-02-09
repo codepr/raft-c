@@ -3,11 +3,11 @@
 #include "darray.h"
 #include <stdio.h>
 
-int file_open(void *context)
+int file_open(void *context, const char *mode)
 {
     file_context_t *fcontext = context;
 
-    fcontext->fp             = fopen(fcontext->path, "wb");
+    fcontext->fp             = fopen(fcontext->path, mode);
     if (!fcontext->fp)
         return -1;
 

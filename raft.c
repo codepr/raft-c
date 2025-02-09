@@ -182,21 +182,21 @@ static int raft_save_state(void)
     if (!raft_storage)
         return -1;
 
-    return raft_storage->save_state(&cm.storage, &cm.machine);
+    return raft_storage->save_state(cm.storage, &cm.machine);
 }
 
 static int raft_open_store(void)
 {
     if (!raft_storage)
         return -1;
-    return raft_storage->open_store(&cm.storage);
+    return raft_storage->open_store(cm.storage, "r+w");
 }
 
 static int raft_close_store(void)
 {
     if (!raft_storage)
         return -1;
-    return raft_storage->close_store(&cm.storage);
+    return raft_storage->close_store(cm.storage);
 }
 
 static int raft_load_state(void)
@@ -205,7 +205,7 @@ static int raft_load_state(void)
     if (!raft_storage)
         return -1;
 
-    return raft_storage->load_state(&cm.storage, &cm.machine);
+    return raft_storage->load_state(cm.storage, &cm.machine);
 }
 
 static void transition_to_leader(void)
@@ -648,12 +648,12 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
             .load_state  = file_load_state,
         };
 
-        strncmp(file_store_context.path, store_dest, BUFSIZ);
+        strncpy(file_store_context.path, store_dest, BUFSIZ);
         raft_set_persistence(&file_store_context, &file_storage);
     }
 
     if (raft_open_store() < 0)
-        log_error("Error opening store");
+        log_error("Error opening storage");
 
     if (raft_load_state())
         log_info("Restoring raft state from disk");

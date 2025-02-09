@@ -168,13 +168,10 @@ static void server_start(int server_fd)
 }
 
 typedef struct {
-    int type;
-    node_type_t node_type;
-    union {
-        int node_id;
-        int port;
-    };
-} config_t;
+    char config_file[64];
+    int node_id;
+    int port;
+} args_t;
 
 static void print_usage(const char *prog_name)
 {
@@ -182,33 +179,25 @@ static void print_usage(const char *prog_name)
     exit(EXIT_FAILURE);
 }
 
-static void parse_args(int argc, char *argv[], config_t *config)
+static void parse_args(int argc, char *argv[], args_t *args)
 {
     int opt;
-    while ((opt = getopt(argc, argv, "n:p:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:n:p:")) != -1) {
         switch (opt) {
+        case 'c':
+            strncpy(args->config_file, optarg, 64);
+            config_load(optarg);
+            break;
         case 'n':
-            config->type    = 0;
-            config->node_id = atoi(optarg);
+            args->node_id = atoi(optarg);
             break;
         case 'p':
-            config->type = 1;
-            config->port = atoi(optarg);
-            break;
-        case 't':
-            if (strncasecmp(optarg, "main", 4) == 0)
-                config->type = NODE_MAIN;
-            else if (strncasecmp(optarg, "replica", 7) == 0)
-                config->type = NODE_REPLICA;
+            args->port = atoi(optarg);
             break;
         default:
             print_usage(argv[0]);
+            break;
         }
-    }
-
-    // Validate required arguments
-    if (config->node_id == -1 || config->port == -1) {
-        print_usage(argv[0]);
     }
 }
 
@@ -218,29 +207,48 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
 
     config_set_default();
-    config_print();
-    config_free();
 
-    config_t config = {-1};
+    args_t config                                    = {0};
+    config.node_id                                   = -1;
+    char node_strings[MAX_LIST_SIZE][MAX_VALUE_SIZE] = {0};
+    char raft_strings[MAX_LIST_SIZE][MAX_VALUE_SIZE] = {0};
+    cluster_node_t nodes[3]                          = {0};
+    cluster_node_t replicas[3]                       = {0};
+    int node_id                                      = -1;
 
     parse_args(argc, argv, &config);
 
-    cluster_node_t peers[3] = {
-        {"127.0.0.1", 8777}, {"127.0.0.1", 8778}, {"127.0.0.1", 8779}};
-    cluster_node_t replicas[3] = {
-        {"127.0.0.1", 18777}, {"127.0.0.1", 18778}, {"127.0.0.1", 18779}};
-    cluster_start(peers, 3, replicas, 3, config.node_id, "raft_state.bin",
-                  config.node_type);
+    config_print();
 
-    int server_fd = 0;
+    int nodes_num    = config_get_list("shard_leaders", node_strings);
+    int replicas_num = config_get_list("raft_replicas", raft_strings);
 
-    if (config.type == 0)
-        server_fd =
-            tcp_listen(peers[config.node_id].ip, peers[config.node_id].port);
-    else
+    for (int i = 0; i < nodes_num; ++i)
+        cluster_node_from_string(node_strings[i], &nodes[i]);
+
+    for (int i = 0; i < replicas_num; ++i)
+        cluster_node_from_string(raft_strings[i], &replicas[i]);
+
+    node_id = config.node_id >= 0 ? config.node_id : config_get_int("id");
+
+    cluster_start(nodes, nodes_num, replicas, replicas_num, node_id,
+                  "raft_state.bin");
+
+    int server_fd       = 0;
+    cluster_node_t this = {0};
+    cluster_node_from_string(config_get("host"), &this);
+
+    if (config.node_id >= 0)
+        server_fd = tcp_listen(nodes[node_id].ip, nodes[node_id].port);
+    else if (config.port > 0)
         server_fd = tcp_listen("127.0.0.1", config.port);
+    else
+        server_fd = tcp_listen(this.ip, this.port);
 
     if (server_fd < 0)
         exit(EXIT_FAILURE);
+
     server_start(server_fd);
+
+    config_free();
 }

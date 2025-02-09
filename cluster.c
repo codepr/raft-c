@@ -182,26 +182,26 @@ struct raft_opts {
 static void *raft_start(void *arg)
 {
     const struct raft_opts *opts = arg;
-    raft_server_start(&opts->saddr, opts->store);
+    char store[64]               = {0};
+    strncpy(store, opts->store, 64);
+    raft_server_start(&opts->saddr, store);
     return NULL;
 }
 
 void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
-                   const char *store, node_type_t node_type)
+                   const char *store)
 {
-    if (node_type == NODE_MAIN) {
-        cluster.node_id   = id;
-        cluster.transport = (cluster_transport_t){
-            .connect = tcp_connect, .send_data = tcp_send, .close = tcp_close};
+    cluster.node_id   = id;
+    cluster.transport = (cluster_transport_t){
+        .connect = tcp_connect, .send_data = tcp_send, .close = tcp_close};
 
-        for (size_t i = 0; i < num_nodes; ++i) {
-            strncpy(cluster.nodes[i].ip, nodes[i].ip, IP_LENGTH);
-            cluster.nodes[i].port = nodes[i].port;
-        }
-
-        hashring_init(nodes, num_nodes);
+    for (size_t i = 0; i < num_nodes; ++i) {
+        strncpy(cluster.nodes[i].ip, nodes[i].ip, IP_LENGTH);
+        cluster.nodes[i].port = nodes[i].port;
     }
+
+    hashring_init(nodes, num_nodes);
 
     // Start raft replicas
     raft_addr.sin_family = AF_INET;
@@ -216,7 +216,7 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
         raft_register_node(replicas[i].ip, replicas[i].port);
 
     struct raft_opts opts = {.saddr = raft_addr};
-    strncmp(opts.store, store, BUFSIZ);
+    strncpy(opts.store, store, BUFSIZ);
     pthread_create(&raft_thread, NULL, &raft_start, &opts);
     cluster.is_running = true;
 }
