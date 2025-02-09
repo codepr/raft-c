@@ -31,7 +31,7 @@ libraft.so: $(LIB_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJ) $(RAFT_C_EXEC) libraft.so
+	rm -f $(RAFT_C_OBJ) $(RAFT_C_EXEC) libraft.so
 
 .PHONY: all clean
 
