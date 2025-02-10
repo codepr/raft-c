@@ -247,3 +247,34 @@ message_type_t raft_bin_message_read(const uint8_t *buf, raft_message_t *rm)
     }
     return rm->type;
 }
+
+ssize_t cluster_bin_message_write(uint8_t *buf, const cluster_message_t *cm)
+{
+    ssize_t bytes = write_u8(buf++, cm->type);
+    switch (cm->type) {
+    case CM_CLUSTER_JOIN:
+        break;
+    case CM_CLUSTER_DATA:
+        bytes += write_i32(buf, cm->payload.size);
+        buf += sizeof(int32_t);
+        bytes += sizeof(int32_t);
+        memcpy(buf, cm->payload.data, cm->payload.size);
+        break;
+    }
+    return bytes;
+}
+
+cm_type_t cluster_bin_message_read(const uint8_t *buf, cluster_message_t *cm)
+{
+    cm->type = read_u8(buf++);
+    switch (cm->type) {
+    case CM_CLUSTER_JOIN:
+        break;
+    case CM_CLUSTER_DATA:
+        cm->payload.size = read_i32(buf);
+        buf += sizeof(int32_t);
+        memcpy(cm->payload.data, buf, cm->payload.size);
+        break;
+    }
+    return cm->type;
+}

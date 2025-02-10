@@ -6,8 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define IP_LENGTH         16
-#define MAX_CLUSTER_NODES 64
+#define IP_LENGTH          16
+#define MAX_CLUSTER_NODES  64
+#define CLUSTER_MAGIC_BYTE 0xA1B2 // Unique identifier for cluster messages
 
 typedef struct {
     char ip[IP_LENGTH];
@@ -24,8 +25,19 @@ typedef enum { CM_CLUSTER_JOIN, CM_CLUSTER_DATA } cm_type_t;
 
 typedef struct {
     cm_type_t type;
+    char key[MAX_KEY_SIZE];
     cluster_payload_t payload;
 } cluster_message_t;
+
+/**
+ ** Cluster message encoding interface, allows for multiple serialization
+ ** types, by default it uses the binary defined in encoding.h
+ **/
+typedef struct cluster_encoding {
+    ssize_t (*cluster_message_write)(uint8_t *buf, const cluster_message_t *cm);
+    cm_type_t (*cluster_message_read)(const uint8_t *buf,
+                                      cluster_message_t *cm);
+} cluster_encoding_t;
 
 typedef struct {
     int (*connect)(const cluster_node_t *node, int nonblocking);
@@ -39,7 +51,8 @@ typedef struct {
     bool is_running;
     size_t num_nodes;
     cluster_node_t nodes[MAX_CLUSTER_NODES];
-    cluster_transport_t transport;
+    cluster_encoding_t *encoding;
+    cluster_transport_t *transport;
 } cluster_t;
 
 int cluster_node_from_string(const char *str, cluster_node_t *node);
@@ -47,6 +60,7 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
                    const char *store, node_type_t type);
 void cluster_stop(void);
-int cluster_submit(const char *key, const cluster_message_t *message);
+ssize_t cluster_message_read(const uint8_t *buf, cluster_message_t *cm);
+int cluster_submit(const cluster_message_t *message);
 
 #endif

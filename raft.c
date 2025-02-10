@@ -671,7 +671,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
     cm.node_id                          = node_id;
     char ip[IP_LENGTH];
     get_ip_str(&cm.nodes.items[cm.node_id].addr, ip, IP_LENGTH);
-    log_info("UDP listen on %s:%d", ip,
+    log_info("Replica listen on %s:%d", ip,
              htons(cm.nodes.items[cm.node_id].addr.sin_port));
     int sock_fd =
         udp_listen(ip, htons(cm.nodes.items[cm.node_id].addr.sin_port));

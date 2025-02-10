@@ -1,5 +1,6 @@
 #include "cluster.h"
 #include "config.h"
+#include "darray.h"
 #include "raft.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -86,49 +87,52 @@ static int tcp_accept(int server_fd)
     return fd;
 
 err:
-    fprintf(stderr, "server_accept -> accept() %s\n", strerror(errno));
+    log_error("server_accept -> accept() %s", strerror(errno));
     return -1;
 }
 
-static void server_start(int server_fd)
+static void server_start(int server_fd, int cluster_fd)
 {
     fd_set read_fds;
-    int max_fd     = server_fd;
+    int max_fd     = cluster_fd > server_fd ? cluster_fd : server_fd;
     int num_events = 0, i = 0;
-    unsigned char buf[BUFSIZ];
-    int client_fds[FD_SETSIZE];
-
-    // Initialize client_fds array
-    for (i = 0; i < FD_SETSIZE; i++) {
-        client_fds[i] = -1;
-    }
+    unsigned char buf[BUFSIZ]   = {0};
+    int client_fds[FD_SETSIZE]  = {-1};
+    int cluster_fds[FD_SETSIZE] = {-1};
 
     while (1) {
         memset(buf, 0x00, sizeof(buf));
 
         FD_ZERO(&read_fds);
         FD_SET(server_fd, &read_fds);
+        if (cluster_fd >= 0)
+            FD_SET(cluster_fd, &read_fds);
 
-        // Re-arm client descriptors to be monitored by the select call
+        // Re-arm client descriptors and cluster ones to be monitored by the
+        // select call
         for (i = 0; i < FD_SETSIZE; ++i) {
             if (client_fds[i] >= 0) {
                 FD_SET(client_fds[i], &read_fds);
                 if (client_fds[i] > max_fd)
                     max_fd = client_fds[i];
             }
+
+            if (cluster_fds[i] >= 0) {
+                FD_SET(cluster_fds[i], &read_fds);
+                if (cluster_fds[i] > max_fd)
+                    max_fd = cluster_fds[i];
+            }
         }
 
         num_events = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
-        if (num_events < 0) {
-            fprintf(stderr, "select() error: %s\n", strerror(errno));
-            exit(EXIT_FAILURE);
-        }
+        if (num_events < 0)
+            log_critical("select() error: %s", strerror(errno));
 
         if (FD_ISSET(server_fd, &read_fds)) {
             // New connection
             int client_fd = tcp_accept(server_fd);
             if (client_fd < 0) {
-                fprintf(stderr, "accept() error: %s\n", strerror(errno));
+                log_error("accept() error: %s", strerror(errno));
                 continue;
             }
 
@@ -140,21 +144,40 @@ static void server_start(int server_fd)
             }
 
             if (i == FD_SETSIZE) {
-                fprintf(stderr, "too many clients connected");
+                log_error("Too many clients connected");
                 close(client_fd);
+                continue;
+            }
+        } else if (FD_ISSET(cluster_fd, &read_fds)) {
+            // New cluster node connected
+            int node_fd = tcp_accept(cluster_fd);
+            if (node_fd < 0) {
+                log_error("accept() error: %s", strerror(errno));
+                continue;
+            }
+
+            for (i = 0; i < FD_SETSIZE; ++i) {
+                if (cluster_fds[i] < 0) {
+                    cluster_fds[i] = node_fd;
+                    break;
+                }
+            }
+
+            if (i == FD_SETSIZE) {
+                log_error("Too many nodes connected");
+                close(node_fd);
                 continue;
             }
         }
 
         for (i = 0; i < FD_SETSIZE; ++i) {
-            int fd = client_fds[i];
-            if (fd >= 0 && FD_ISSET(fd, &read_fds)) {
+            if (client_fds[i] >= 0 && FD_ISSET(client_fds[i], &read_fds)) {
                 // TODO read data here
-                ssize_t n = recv(fd, buf, sizeof(buf), 0);
+                ssize_t n = recv(client_fds[i], buf, sizeof(buf), 0);
                 if (n <= 0) {
-                    close(fd);
+                    close(client_fds[i]);
                     client_fds[i] = -1;
-                    printf("Client disconnected\n");
+                    log_info("Client disconnected");
                     continue;
                 }
                 // TODO read message here, assuming integers from a netcat
@@ -162,6 +185,26 @@ static void server_start(int server_fd)
 
                 int value = atoi((const char *)buf);
                 raft_submit(value);
+            } else if (cluster_fds[i] >= 0 &&
+                       FD_ISSET(cluster_fds[i], &read_fds)) {
+                ssize_t n = recv(cluster_fds[i], buf, sizeof(buf), 0);
+                if (n <= 0) {
+                    close(client_fds[i]);
+                    client_fds[i] = -1;
+                    log_info("Client disconnected");
+                    continue;
+                }
+
+                cluster_message_t message = {0};
+                cluster_message_read(buf, &message);
+
+                switch (message.type) {
+                case CM_CLUSTER_JOIN:
+                    break;
+                case CM_CLUSTER_DATA:
+                    cluster_submit(&message);
+                    break;
+                }
             }
         }
     }
@@ -234,21 +277,32 @@ int main(int argc, char **argv)
     cluster_start(nodes, nodes_num, replicas, replicas_num, node_id,
                   "raft_state.bin", config_get_enum("type"));
 
-    int server_fd       = 0;
+    int cluster_fd      = -1;
+    int server_fd       = -1;
+
     cluster_node_t this = {0};
     cluster_node_from_string(config_get("host"), &this);
 
-    if (config.node_id >= 0)
-        server_fd = tcp_listen(nodes[node_id].ip, nodes[node_id].port);
-    else if (config.port > 0)
-        server_fd = tcp_listen("127.0.0.1", config.port);
-    else
-        server_fd = tcp_listen(this.ip, this.port);
-
+    server_fd = tcp_listen(this.ip, this.port);
     if (server_fd < 0)
         exit(EXIT_FAILURE);
 
-    server_start(server_fd);
+    log_info("Listening on %s", config_get("host"));
+
+    if (config_get_enum("type") == NT_SHARD) {
+        if (config.port > 0)
+            cluster_fd = tcp_listen("127.0.0.1", config.port);
+        else
+            cluster_fd = tcp_listen(nodes[node_id].ip, nodes[node_id].port);
+
+        if (cluster_fd < 0)
+            exit(EXIT_FAILURE);
+
+        log_info("Cluster channel on %s:%d", nodes[node_id].ip,
+                 nodes[node_id].port);
+    }
+
+    server_start(server_fd, cluster_fd);
 
     config_free();
 }

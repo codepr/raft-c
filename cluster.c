@@ -1,4 +1,5 @@
 #include "cluster.h"
+#include "encoding.h"
 #include "raft.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -162,7 +163,9 @@ int cluster_node_from_string(const char *str, cluster_node_t *node)
     if (!str || !node)
         return -1;
 
-    char *ptr   = (char *)str;
+    char buf[MAX_VALUE_SIZE] = {0};
+    strncpy(buf, str, MAX_VALUE_SIZE);
+    char *ptr   = (char *)buf;
     char *token = strtok(ptr, ":");
     strncpy(node->ip, token, IP_LENGTH);
     token      = strtok(NULL, "\0");
@@ -171,19 +174,17 @@ int cluster_node_from_string(const char *str, cluster_node_t *node)
     return 0;
 }
 
-static pthread_t raft_thread;
-
-struct raft_opts {
+struct replica_opts {
     struct sockaddr_in saddr;
     char store[BUFSIZ];
 };
 
-static void *raft_start(void *arg)
+static pthread_t replica_thread;
+static struct replica_opts opts = {0};
+
+static void *replica_start(void *arg)
 {
-    const struct raft_opts *opts = arg;
-    char store[64]               = {0};
-    strncpy(store, opts->store, 64);
-    raft_server_start(&opts->saddr, store);
+    raft_server_start(&opts.saddr, opts.store);
     return NULL;
 }
 
@@ -191,9 +192,19 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const cluster_node_t replicas[], size_t num_replicas, int id,
                    const char *store, node_type_t type)
 {
-    cluster.node_id   = id;
-    cluster.transport = (cluster_transport_t){
-        .connect = tcp_connect, .send_data = tcp_send, .close = tcp_close};
+    cluster.node_id                 = id;
+
+    cluster_encoding_t *encoding    = calloc(1, sizeof(*encoding));
+    encoding->cluster_message_read  = cluster_bin_message_read;
+    encoding->cluster_message_write = cluster_bin_message_write;
+
+    cluster_transport_t *transport  = calloc(1, sizeof(*transport));
+    transport->connect              = tcp_connect;
+    transport->close                = tcp_close;
+    transport->send_data            = tcp_send;
+
+    cluster.encoding                = encoding;
+    cluster.transport               = transport;
 
     for (size_t i = 0; i < num_nodes; ++i) {
         strncpy(cluster.nodes[i].ip, nodes[i].ip, IP_LENGTH);
@@ -204,36 +215,45 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
         raft_register_node(replicas[i].ip, replicas[i].port);
 
     hashring_init(nodes, num_nodes);
-    struct raft_opts opts = {0};
+
     opts.saddr.sin_family = AF_INET;
     strncpy(opts.store, store, BUFSIZ);
 
-    const cluster_node_t *raft_node =
+    const cluster_node_t *replica_node =
         type == NT_SHARD ? &nodes[id] : &replicas[id];
 
     // Start raft replicas
-    opts.saddr.sin_port = htons(raft_node->port);
+    opts.saddr.sin_port = htons(replica_node->port);
 
-    if (inet_pton(AF_INET, raft_node->ip, &opts.saddr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, replica_node->ip, &opts.saddr.sin_addr) <= 0) {
         perror("Invalid peer IP address");
         return;
     }
 
-    pthread_create(&raft_thread, NULL, &raft_start, &opts);
+    pthread_create(&replica_thread, NULL, &replica_start, NULL);
     cluster.is_running = true;
 }
 
 void cluster_stop(void)
 {
     for (size_t i = 0; i < cluster.num_nodes; ++i)
-        cluster.transport.close(&cluster.nodes[i]);
-    pthread_join(raft_thread, NULL);
+        cluster.transport->close(&cluster.nodes[i]);
+
+    pthread_join(replica_thread, NULL);
     cluster.is_running = false;
+
+    free(cluster.encoding);
+    free(cluster.transport);
 }
 
-int cluster_submit(const char *key, const cluster_message_t *message)
+ssize_t cluster_message_read(const uint8_t *buf, cluster_message_t *cm)
 {
-    cluster_node_t *node = hashring_lookup(key);
+    return cluster.encoding->cluster_message_read(buf, cm);
+}
+
+int cluster_submit(const cluster_message_t *message)
+{
+    cluster_node_t *node = hashring_lookup(message->key);
     cluster_node_t *this = &cluster.nodes[cluster.node_id];
     if (strncmp(node->ip, this->ip, IP_LENGTH) == 0 &&
         node->port == this->port) {
@@ -241,5 +261,5 @@ int cluster_submit(const char *key, const cluster_message_t *message)
         return 0;
     }
 
-    return cluster.transport.send_data(node, message);
+    return cluster.transport->send_data(node, message);
 }
