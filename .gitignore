@@ -17,3 +17,4 @@
 raft-c
 .clang-tidy
 raft_state.*
+logs

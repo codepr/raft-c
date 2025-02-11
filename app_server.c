@@ -1,7 +1,7 @@
+#include "binary.h"
 #include "cluster.h"
 #include "config.h"
 #include "darray.h"
-#include "raft.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -10,10 +10,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #define BACKLOG        128
 #define CLIENT_TIMEOUT 10000
+
+static unsigned long long get_microseconds_timestamp(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    // Converts the time to microseconds
+    return (unsigned long long)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
+}
 
 static int set_nonblocking(int fd)
 {
@@ -96,9 +106,20 @@ static void server_start(int server_fd, int cluster_fd)
     fd_set read_fds;
     int max_fd     = cluster_fd > server_fd ? cluster_fd : server_fd;
     int num_events = 0, i = 0;
-    unsigned char buf[BUFSIZ]   = {0};
-    int client_fds[FD_SETSIZE]  = {-1};
-    int cluster_fds[FD_SETSIZE] = {-1};
+    useconds_t join_timeout_us     = 500000;
+    useconds_t remaining_us        = 0;
+    useconds_t last_update_time_us = 0;
+    struct timeval tv              = {0, join_timeout_us};
+    unsigned char buf[BUFSIZ]      = {0};
+    int client_fds[FD_SETSIZE]     = {0};
+    int cluster_fds[FD_SETSIZE]    = {0};
+    cluster_message_t message      = {0};
+
+    // Initialize client_fds array
+    for (i = 0; i < FD_SETSIZE; i++) {
+        client_fds[i]  = -1;
+        cluster_fds[i] = -1;
+    }
 
     while (1) {
         memset(buf, 0x00, sizeof(buf));
@@ -124,7 +145,7 @@ static void server_start(int server_fd, int cluster_fd)
             }
         }
 
-        num_events = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+        num_events = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
         if (num_events < 0)
             log_critical("select() error: %s", strerror(errno));
 
@@ -148,7 +169,7 @@ static void server_start(int server_fd, int cluster_fd)
                 close(client_fd);
                 continue;
             }
-        } else if (FD_ISSET(cluster_fd, &read_fds)) {
+        } else if (cluster_fd >= 0 && FD_ISSET(cluster_fd, &read_fds)) {
             // New cluster node connected
             int node_fd = tcp_accept(cluster_fd);
             if (node_fd < 0) {
@@ -183,8 +204,18 @@ static void server_start(int server_fd, int cluster_fd)
                 // TODO read message here, assuming integers from a netcat
                 // client or telnet, just plain bytes
 
-                int value = atoi((const char *)buf);
-                raft_submit(value);
+                char key[MAX_KEY_SIZE]        = {0};
+                uint8_t value[MAX_VALUE_SIZE] = {0};
+                int val                       = 0;
+                sscanf((const char *)buf, "SET %s %d", key, &val);
+                // int value = atoi((const char *)buf);
+
+                message.type = CM_CLUSTER_DATA;
+                strncpy(message.key, key, MAX_KEY_SIZE);
+                write_i32(value, val);
+                message.payload.data = value;
+                message.payload.size = sizeof(int);
+                cluster_submit(&message);
             } else if (cluster_fds[i] >= 0 &&
                        FD_ISSET(cluster_fds[i], &read_fds)) {
                 ssize_t n = recv(cluster_fds[i], buf, sizeof(buf), 0);
@@ -195,7 +226,6 @@ static void server_start(int server_fd, int cluster_fd)
                     continue;
                 }
 
-                cluster_message_t message = {0};
                 cluster_message_read(buf, &message);
 
                 switch (message.type) {
@@ -206,6 +236,18 @@ static void server_start(int server_fd, int cluster_fd)
                     break;
                 }
             }
+        }
+
+        remaining_us = get_microseconds_timestamp() - last_update_time_us;
+        if (remaining_us >= join_timeout_us) {
+            // TODO try to connect to the cluster nodes here
+            join_timeout_us     = 500000;
+            last_update_time_us = get_microseconds_timestamp();
+            tv.tv_sec           = 0;
+            tv.tv_usec          = join_timeout_us;
+        } else {
+            tv.tv_sec  = 0;
+            tv.tv_usec = join_timeout_us - remaining_us;
         }
     }
 }

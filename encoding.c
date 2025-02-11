@@ -255,10 +255,15 @@ ssize_t cluster_bin_message_write(uint8_t *buf, const cluster_message_t *cm)
     case CM_CLUSTER_JOIN:
         break;
     case CM_CLUSTER_DATA:
+        bytes += write_i32(buf, strlen(cm->key));
+        buf += sizeof(int32_t);
+        memcpy(buf, cm->key, strlen(cm->key));
+        buf += strlen(cm->key);
+        bytes += strlen(cm->key);
         bytes += write_i32(buf, cm->payload.size);
         buf += sizeof(int32_t);
-        bytes += sizeof(int32_t);
         memcpy(buf, cm->payload.data, cm->payload.size);
+        bytes += cm->payload.size;
         break;
     }
     return bytes;
@@ -266,14 +271,22 @@ ssize_t cluster_bin_message_write(uint8_t *buf, const cluster_message_t *cm)
 
 cm_type_t cluster_bin_message_read(const uint8_t *buf, cluster_message_t *cm)
 {
-    cm->type = read_u8(buf++);
+    // TODO remove / arena
+    uint8_t *data   = calloc(1, MAX_VALUE_SIZE);
+    int32_t keysize = 0;
+    cm->type        = read_u8(buf++);
     switch (cm->type) {
     case CM_CLUSTER_JOIN:
         break;
     case CM_CLUSTER_DATA:
+        keysize = read_i32(buf);
+        buf += sizeof(int32_t);
+        memcpy(cm->key, buf, keysize);
+        buf += keysize;
         cm->payload.size = read_i32(buf);
         buf += sizeof(int32_t);
-        memcpy(cm->payload.data, buf, cm->payload.size);
+        memcpy(data, buf, cm->payload.size);
+        cm->payload.data = data;
         break;
     }
     return cm->type;

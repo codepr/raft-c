@@ -1,4 +1,6 @@
 #include "cluster.h"
+#include "binary.h"
+#include "darray.h"
 #include "encoding.h"
 #include "raft.h"
 #include <arpa/inet.h>
@@ -6,8 +8,6 @@
 #include <pthread.h>
 #include <string.h>
 #include <unistd.h>
-
-#define MAX_SHARDS 128
 
 // Global hashring, initializing to 0 (zero-initialization).
 static cluster_t cluster = {0};
@@ -78,7 +78,10 @@ err:
 static ssize_t tcp_send(const cluster_node_t *node,
                         const cluster_message_t *message)
 {
-    return send(node->sock_fd, message->payload.data, message->payload.size, 0);
+    // TODO temporary
+    uint8_t buf[BUFSIZ] = {0};
+    ssize_t length      = cluster.encoding->cluster_message_write(buf, message);
+    return send(node->sock_fd, buf, length, 0);
 }
 
 static void tcp_close(cluster_node_t *node)
@@ -89,6 +92,9 @@ static void tcp_close(cluster_node_t *node)
     node->sock_fd = -1;
 }
 
+#define MAX_SHARDS       128
+#define VNODE_MULTIPLIER 10
+
 typedef struct {
     uint32_t hash;
     int shard_id;
@@ -96,7 +102,8 @@ typedef struct {
 
 typedef struct {
     size_t num_shards;
-    vnode_t vnodes[MAX_SHARDS * 10];
+    size_t num_vnodes;
+    vnode_t vnodes[MAX_SHARDS * VNODE_MULTIPLIER];
     cluster_node_t nodes[MAX_SHARDS];
 } hashring_t;
 
@@ -108,50 +115,56 @@ static uint32_t murmur3(const char *key, uint32_t seed)
 {
     uint32_t h = seed;
     while (*key) {
-        h ^= *key++;
+        h ^= (uint8_t)(*key++);
         h *= 0x5bd1e995;
         h ^= h >> 15;
     }
+    h ^= h >> 13;
+    h *= 0x5bd1e995;
+    h ^= h >> 15;
     return h;
 }
 
+/* Lookup function */
 static cluster_node_t *hashring_lookup(const char *key)
 {
     uint32_t hash = murmur3(key, 0);
 
-    for (size_t i = 0; i < ring.num_shards * 10; ++i) {
+    for (size_t i = 0; i < ring.num_vnodes; ++i) {
         if (ring.vnodes[i].hash >= hash)
             return &ring.nodes[ring.vnodes[i].shard_id];
     }
 
+    /* Wrap-around case: return the lowest hash vnode */
     return &ring.nodes[ring.vnodes[0].shard_id];
 }
 
-static int vnodes_cmp(const void *ptr_a, const void *ptr_b)
+static int vnodes_cmp(const void *a, const void *b)
 {
-    const vnode_t *a = ptr_a;
-    const vnode_t *b = ptr_b;
-    return (a->hash < b->hash) - (a->hash > b->hash);
+    return ((const vnode_t *)a)->hash - ((const vnode_t *)b)->hash;
 }
 
 void hashring_init(const cluster_node_t *shards, size_t num_shards)
 {
-    ring.num_shards         = num_shards;
+    if (num_shards > MAX_SHARDS) {
+        fprintf(stderr, "Too many shards!\n");
+        exit(EXIT_FAILURE);
+    }
 
-    size_t vnodes_per_shard = 10;
-    size_t vnode_count      = 0;
+    ring.num_shards    = num_shards;
+    ring.num_vnodes    = num_shards * VNODE_MULTIPLIER;
 
+    size_t vnode_count = 0;
     for (size_t i = 0; i < num_shards; ++i) {
-        for (size_t v = 0; v < vnodes_per_shard; ++v) {
-            char buf[64] = {0};
+        ring.nodes[i] = shards[i]; // Copy node info only once
+
+        for (size_t v = 0; v < VNODE_MULTIPLIER; ++v) {
+            char buf[64];
             snprintf(buf, sizeof(buf), "%s:%d-%zu", shards[i].ip,
                      shards[i].port, v);
-
             ring.vnodes[vnode_count].hash     = murmur3(buf, 0);
             ring.vnodes[vnode_count].shard_id = i;
             ++vnode_count;
-
-            ring.nodes[i] = shards[i];
         }
     }
 
@@ -168,8 +181,9 @@ int cluster_node_from_string(const char *str, cluster_node_t *node)
     char *ptr   = (char *)buf;
     char *token = strtok(ptr, ":");
     strncpy(node->ip, token, IP_LENGTH);
-    token      = strtok(NULL, "\0");
-    node->port = atoi(token);
+    token           = strtok(NULL, "\0");
+    node->port      = atoi(token);
+    node->connected = 0;
 
     return 0;
 }
@@ -257,8 +271,19 @@ int cluster_submit(const cluster_message_t *message)
     cluster_node_t *this = &cluster.nodes[cluster.node_id];
     if (strncmp(node->ip, this->ip, IP_LENGTH) == 0 &&
         node->port == this->port) {
-        raft_submit(*(int *)message->payload.data);
+        log_info("Submitting in the current node");
+        raft_submit(read_i32(message->payload.data));
+        // TODO remove/arena
+        free(message->payload.data);
         return 0;
+    }
+
+    log_info("Redirecting entry to shard %s:%d", node->ip, node->port);
+
+    if (!node->connected &&
+        (node->sock_fd = cluster.transport->connect(node, 0))) {
+        node->connected = 1;
+        log_info("Connected to the target node");
     }
 
     return cluster.transport->send_data(node, message);

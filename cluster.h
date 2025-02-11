@@ -14,6 +14,7 @@ typedef struct {
     char ip[IP_LENGTH];
     int port;
     int sock_fd;
+    int connected;
 } cluster_node_t;
 
 typedef struct {
