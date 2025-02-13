@@ -1,7 +1,7 @@
 #include "binary.h"
 #include "cluster.h"
 #include "config.h"
-#include "darray.h"
+#include "logger.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,15 +15,6 @@
 
 #define BACKLOG        128
 #define CLIENT_TIMEOUT 10000
-
-static unsigned long long get_microseconds_timestamp(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-
-    // Converts the time to microseconds
-    return (unsigned long long)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
-}
 
 static int set_nonblocking(int fd)
 {
@@ -238,11 +229,11 @@ static void server_start(int server_fd, int cluster_fd)
             }
         }
 
-        remaining_us = get_microseconds_timestamp() - last_update_time_us;
+        remaining_us = current_micros() - last_update_time_us;
         if (remaining_us >= join_timeout_us) {
             // TODO try to connect to the cluster nodes here
             join_timeout_us     = 500000;
-            last_update_time_us = get_microseconds_timestamp();
+            last_update_time_us = current_micros();
             tv.tv_sec           = 0;
             tv.tv_usec          = join_timeout_us;
         } else {
@@ -292,6 +283,8 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
 
     config_set_default();
+
+    log_info("Application node start");
 
     args_t config                                    = {0};
     config.node_id                                   = -1;

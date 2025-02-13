@@ -1,7 +1,9 @@
 #include "raft.h"
 #include "darray.h"
 #include "encoding.h"
+#include "logger.h"
 #include "storage.h"
+#include "time_util.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
@@ -94,24 +96,6 @@ static int udp_listen(const char *host, int port)
         return -1;
 
     return listen_fd;
-}
-
-static unsigned long long get_microseconds_timestamp(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-
-    // Converts the time to microseconds
-    return (unsigned long long)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
-}
-
-static unsigned long long get_seconds_timestamp(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-
-    // Returns the time in seconds
-    return (unsigned long long)ts.tv_sec;
 }
 
 /**
@@ -511,7 +495,8 @@ static void handle_append_entries_reply(int fd, const struct sockaddr_in *peer,
                             match_count++;
                     }
                     if (match_count * 2 > cm.nodes.length + 1)
-                        cm.machine.state_volatile.commit_index = i;
+                        log_info("Majority ACK received, committing log");
+                    cm.machine.state_volatile.commit_index = i;
                 }
             }
             if (cm.machine.state_volatile.commit_index !=
@@ -723,8 +708,8 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
                 handle_forward_value_rpc(&raft_message.forward_value_rpc);
                 break;
             case MT_RAFT_APPEND_ENTRIES_RPC:
-                last_update_time_us = get_microseconds_timestamp();
-                last_heartbeat_s    = get_seconds_timestamp();
+                last_update_time_us = current_micros();
+                last_heartbeat_s    = current_seconds();
                 handle_append_entries_rpc(sock_fd, &peer_addr,
                                           &raft_message.append_entries_rpc);
                 break;
@@ -742,7 +727,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
                 // Immediately send the first AppendEntriesRPC
                 if (cm.machine.state == RS_LEADER) {
                     broadcast_heartbeat(sock_fd);
-                    last_heartbeat_s  = get_seconds_timestamp();
+                    last_heartbeat_s  = current_seconds();
                     select_timeout_us = 0;
                     select_timeout_s  = HEARTBEAT_TIMEOUT_S;
                     tv.tv_sec         = select_timeout_s;
@@ -755,7 +740,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
         // Check if the election timeout
         // is over, if the raft_state is
         // not RS_CANDIDATE, skip it
-        remaining_s = get_seconds_timestamp() - last_heartbeat_s;
+        remaining_s = current_seconds() - last_heartbeat_s;
 
         switch (cm.machine.state) {
         case RS_LEADER:
@@ -763,7 +748,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
             // sending heartbeats
             if (remaining_s >= select_timeout_s) {
                 broadcast_heartbeat(sock_fd);
-                last_heartbeat_s = get_seconds_timestamp();
+                last_heartbeat_s = current_seconds();
                 tv.tv_sec        = HEARTBEAT_TIMEOUT_S;
                 tv.tv_usec       = 0;
             } else {
@@ -783,7 +768,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
             }
             break;
         default:
-            remaining_us = get_microseconds_timestamp() - last_update_time_us;
+            remaining_us = current_micros() - last_update_time_us;
             // We're in RS_CANDIDATE
             // state, starting an election
             if (remaining_s > select_timeout_s) {
@@ -791,7 +776,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
                     transition_to_candidate();
                     start_election(sock_fd);
                     select_timeout_us   = ELECTION_TIMEOUT();
-                    last_update_time_us = get_microseconds_timestamp();
+                    last_update_time_us = current_micros();
                     tv.tv_sec           = 0;
                     tv.tv_usec          = select_timeout_us;
                 } else {

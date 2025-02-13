@@ -1,5 +1,5 @@
 #include "config.h"
-#include "darray.h"
+#include "logger.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +10,7 @@
 // Default config table
 #define ID                "0"
 #define TYPE              "shard"
-#define HOST              "127.0.0.1:8777"
+#define HOST              "127.0.0.1:18777"
 #define SHARD_LEADERS     "127.0.0.1:8777 127.0.0.1:8877 127.0.0.1:8977"
 #define RAFT_REPLICAS     "127.0.0.1:9777 127.0.0.1:9778"
 #define RAFT_HEARTBEAT_MS "150"

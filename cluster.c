@@ -1,7 +1,7 @@
 #include "cluster.h"
 #include "binary.h"
-#include "darray.h"
 #include "encoding.h"
+#include "logger.h"
 #include "raft.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
