@@ -146,6 +146,18 @@ static consensus_module_t cm          = {0};
 
 static raft_encoding_t *raft_encoding = NULL;
 
+#define raft_info(fmt, ...)                                                    \
+    log_info("N%d T%d " fmt, cm.node_id,                                       \
+             cm.machine.current_term __VA_OPT__(, ) __VA_ARGS__)
+
+#define raft_debug(fmt, ...)                                                   \
+    log_debug("N%d T%d " fmt, cm.node_id,                                      \
+              cm.machine.current_term __VA_OPT__(, ) __VA_ARGS__)
+
+#define raft_error(fmt, ...)                                                   \
+    log_error("N%d T%d " fmt, cm.node_id,                                      \
+              cm.machine.current_term __VA_OPT__(, ) __VA_ARGS__)
+
 static ssize_t raft_encode(uint8_t *buf, const raft_message_t *rm)
 {
     return raft_encoding->raft_message_write(buf, rm);
@@ -201,7 +213,7 @@ static void transition_to_leader(void)
         cm.machine.leader_volatile.next_index[i]  = cm.machine.log.length;
         cm.machine.leader_volatile.match_index[i] = -1;
     }
-    log_info("Transition to LEADER");
+    raft_info("transition to leader");
 }
 
 static void transition_to_follower(int term)
@@ -210,14 +222,14 @@ static void transition_to_follower(int term)
     cm.machine.voted_for    = -1;
     cm.machine.current_term = term;
 
-    log_info("Transition to FOLLOWER");
+    raft_info("transition to follower");
 }
 
 static void transition_to_candidate(void)
 {
     cm.machine.state = RS_CANDIDATE;
 
-    log_info("Transition to CANDIDATE");
+    raft_info("transition to candidate");
 }
 
 static int last_log_term(void)
@@ -246,7 +258,7 @@ static void start_election(int fd)
     if (cm.machine.state != RS_CANDIDATE)
         return;
 
-    log_info("Start election current_term=%d", cm.machine.current_term);
+    raft_info("start election");
     cm.votes_received = 1;
     cm.machine.current_term++;
     cm.machine.voted_for   = cm.node_id;
@@ -262,8 +274,8 @@ static void start_election(int fd)
             continue;
 
         if (send_raft_message(fd, &cm.nodes.items[i].addr, &message) < 0)
-            log_error("Failed to send RequestVoteRPC to client %i: %s",
-                      cm.nodes.items[i].addr.sin_addr.s_addr, strerror(errno));
+            raft_error("failed RequestVoteRPC to node %i: %s",
+                       cm.nodes.items[i].addr.sin_addr.s_addr, strerror(errno));
     }
 }
 
@@ -274,7 +286,7 @@ static void handle_cluster_join_rpc(int fd, const add_node_rpc_t *an)
     if (cm.machine.state == RS_LEADER) {
         // TODO inefficient double translation (host str, port int) <=>
         // struct sockaddr_in
-        log_info("Cluster join request, updating followers");
+        raft_info("cluster join request, updating followers");
         raft_register_node(an->ip_addr, an->port);
         // Forward the new node to the other nodes
         raft_message.type = MT_RAFT_ADD_PEER_RPC;
@@ -283,7 +295,7 @@ static void handle_cluster_join_rpc(int fd, const add_node_rpc_t *an)
             send_raft_message(fd, &cm.nodes.items[i].addr, &raft_message);
         }
     } else {
-        log_info("Cluster join request, forwarding to leader");
+        raft_info("cluster join request, forwarding to leader");
         // Forward to the raft leader
         send_raft_message(fd, &cm.nodes.items[cm.current_leader_id].addr,
                           &raft_message);
@@ -292,8 +304,8 @@ static void handle_cluster_join_rpc(int fd, const add_node_rpc_t *an)
 
 static void handle_add_node_rpc(const add_node_rpc_t *an)
 {
-    log_info("New node (%s:%d) joined the cluster, updating table", an->ip_addr,
-             an->port);
+    raft_info("new node (%s:%d) joined the cluster, updating table",
+              an->ip_addr, an->port);
     raft_register_node(an->ip_addr, an->port);
 }
 
@@ -305,8 +317,7 @@ static void handle_forward_value_rpc(const forward_value_rpc_t *fv)
 static void handle_request_vote_rpc(int fd, const struct sockaddr_in *peer,
                                     const request_vote_rpc_t *rv)
 {
-    log_info("Received RequestVoteRPC [current_term=%d, voted_for=%d]",
-             cm.machine.current_term, cm.machine.voted_for);
+    raft_info("received RequestVoteRPC voted_for=%d", cm.machine.voted_for);
     // - If current term > candidate term
     // reply false
     // - If candidate id is unset (0) or
@@ -314,7 +325,7 @@ static void handle_request_vote_rpc(int fd, const struct sockaddr_in *peer,
     // with
     //   the state, reply true
     if (rv->term > cm.machine.current_term) {
-        log_info("Term out of date in RequestVote");
+        raft_info("term %d out of date in RequestVote", rv->term);
         transition_to_follower(rv->term);
     }
 
@@ -336,8 +347,8 @@ static void handle_request_vote_rpc(int fd, const struct sockaddr_in *peer,
     const raft_message_t message = {.type = MT_RAFT_REQUEST_VOTE_REPLY,
                                     .request_vote_reply = rv_reply};
     if (send_raft_message(fd, peer, &message) < 0)
-        log_error("Failed to send RequestVoteReply to client %d: %s",
-                  peer->sin_addr.s_addr, strerror(errno));
+        raft_error("failed RequestVoteReply to client %d: %s",
+                   peer->sin_addr.s_addr, strerror(errno));
 }
 
 static int find_peer_index(const struct sockaddr_in *peer)
@@ -366,8 +377,7 @@ static int online_nodes(void)
 static void handle_request_vote_reply(int fd, const struct sockaddr_in *peer,
                                       const request_vote_reply_t *rv)
 {
-    log_info("Received RequestVoteReply(term=%d, vote_granted=%d)", rv->term,
-             rv->vote_granted);
+    raft_info("received RequestVoteReply vote_granted=%d", rv->vote_granted);
     int peer_id = find_peer_index(peer);
     if (peer_id)
         cm.nodes.items[peer_id].last_active = time(NULL);
@@ -387,26 +397,26 @@ static void handle_request_vote_reply(int fd, const struct sockaddr_in *peer,
 static void handle_append_entries_rpc(int fd, const struct sockaddr_in *peer,
                                       const append_entries_rpc_t *ae)
 {
-    log_info("Received AppendEntriesRPC");
+    raft_info("received AppendEntriesRPC");
     cm.nodes.items[cm.node_id].last_active = time(NULL);
 
     // Keep the current leader up to date
     cm.current_leader_id                   = find_peer_index(peer);
 
     for (int i = 0; i < ae->entries.length; ++i)
-        log_debug("\t(term=%d, value=%d) ", ae->entries.items[i].term,
-                  ae->entries.items[i].value);
+        raft_debug("\t(term=%d, value=%d) ", ae->entries.items[i].term,
+                   ae->entries.items[i].value);
 
     append_entries_reply_t ae_reply = {0};
 
     if (ae->term > cm.machine.current_term) {
-        log_info("Term out of date in AppendEntriesRPC");
+        raft_info("term %d out of date in AppendEntriesRPC", ae->term);
         transition_to_follower(ae->term);
     }
 
     for (int i = 0; i < cm.machine.log.length; ++i)
-        log_debug("\t %d ~> (term=%d value=%d)", i,
-                  cm.machine.log.items[i].term, cm.machine.log.items[i].value);
+        raft_debug("\t %d ~> (term=%d value=%d)", i,
+                   cm.machine.log.items[i].term, cm.machine.log.items[i].value);
 
     if (ae->term == cm.machine.current_term) {
         if (cm.machine.state != RS_FOLLOWER) {
@@ -456,8 +466,8 @@ static void handle_append_entries_rpc(int fd, const struct sockaddr_in *peer,
                                     .append_entries_reply = ae_reply};
 
     if (send_raft_message(fd, peer, &message) < 0)
-        log_error("Failed to send AppendEntriesReply to peer %d: %s",
-                  peer->sin_addr.s_addr, strerror(errno));
+        raft_error("failed AppendEntriesReply to peer %d: %s",
+                   peer->sin_addr.s_addr, strerror(errno));
 }
 
 static void handle_append_entries_reply(int fd, const struct sockaddr_in *peer,
@@ -471,7 +481,7 @@ static void handle_append_entries_reply(int fd, const struct sockaddr_in *peer,
 
     int peer_id = find_peer_index(peer);
     if (peer_id < 0) {
-        log_error("Could not find peer ID for reply");
+        raft_error("could not find peer ID for reply");
         return;
     }
 
@@ -479,7 +489,7 @@ static void handle_append_entries_reply(int fd, const struct sockaddr_in *peer,
 
     if (cm.machine.state == RS_LEADER && cm.machine.current_term == ae->term) {
         if (ae->success) {
-            log_debug("Update peer=%d", peer_id);
+            raft_debug("update peer %d", peer_id);
             cm.machine.leader_volatile.next_index[peer_id] =
                 cm.nodes.items[peer_id].saved_log_length;
             cm.machine.leader_volatile.match_index[peer_id] =
@@ -495,14 +505,13 @@ static void handle_append_entries_reply(int fd, const struct sockaddr_in *peer,
                             match_count++;
                     }
                     if (match_count * 2 > cm.nodes.length + 1)
-                        log_info("Majority ACK received, committing log");
-                    cm.machine.state_volatile.commit_index = i;
+                        cm.machine.state_volatile.commit_index = i;
                 }
             }
             if (cm.machine.state_volatile.commit_index !=
                 current_commit_index) {
-                log_info("Leader sets commit_index=%d",
-                         cm.machine.state_volatile.commit_index);
+                raft_info("leader sets commit_index %d",
+                          cm.machine.state_volatile.commit_index);
 
                 cm.machine.state_volatile.last_applied =
                     cm.machine.state_volatile.commit_index;
@@ -510,15 +519,16 @@ static void handle_append_entries_reply(int fd, const struct sockaddr_in *peer,
         } else {
             if (cm.machine.leader_volatile.next_index[peer_id])
                 cm.machine.leader_volatile.next_index[peer_id]--;
-            log_info("AppendEntriesReply from %d success=false next_index=%d",
-                     peer_id, cm.machine.leader_volatile.next_index[peer_id]);
+            raft_info("received AppendEntriesReply from %d success false "
+                      "next_index %d",
+                      peer_id, cm.machine.leader_volatile.next_index[peer_id]);
         }
     }
 }
 
 static void broadcast_heartbeat(int fd)
 {
-    log_info("Broadcast heartbeat (term=%d)", cm.machine.current_term);
+    raft_info("heartbeat");
 
     raft_message_t message = {
         .type               = MT_RAFT_APPEND_ENTRIES_RPC,
@@ -550,8 +560,8 @@ static void broadcast_heartbeat(int fd)
         // - If it goes through correctly, record a pending request for that
         //   peer node
         if (send_raft_message(fd, &cm.nodes.items[i].addr, &message) < 0)
-            log_error("Failed to send AppendEntriesRPC to client %i: %s",
-                      cm.nodes.items[i].addr.sin_addr.s_addr, strerror(errno));
+            raft_error("failed AppendEntriesRPC to client %i: %s",
+                       cm.nodes.items[i].addr.sin_addr.s_addr, strerror(errno));
 
         // Save current log length at the time of broadcast for this peer
         cm.nodes.items[i].saved_log_length        = cm.machine.log.length;
@@ -638,10 +648,10 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
     }
 
     if (raft_open_store() < 0)
-        log_error("Error opening storage");
+        raft_error("error opening storage");
 
     if (raft_load_state())
-        log_info("Restoring raft state from disk");
+        raft_info("restoring raft state from disk");
 
     srand(time(NULL) ^ getpid());
 
@@ -656,8 +666,8 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
     cm.node_id                          = node_id;
     char ip[IP_LENGTH];
     get_ip_str(&cm.nodes.items[cm.node_id].addr, ip, IP_LENGTH);
-    log_info("Replica listen on %s:%d", ip,
-             htons(cm.nodes.items[cm.node_id].addr.sin_port));
+    raft_info("replica start on %s:%d", ip,
+              htons(cm.nodes.items[cm.node_id].addr.sin_port));
     int sock_fd =
         udp_listen(ip, htons(cm.nodes.items[cm.node_id].addr.sin_port));
 
@@ -695,7 +705,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
             n                           = recvfrom(sock_fd, buf, sizeof(buf), 0,
                                                    (struct sockaddr *)&peer_addr, &addr_len);
             if (n < 0)
-                log_error("recvfrom error: %s", strerror(errno));
+                raft_error("recvfrom error: %s", strerror(errno));
             message_type_t message_type = raft_decode(buf, &raft_message);
             switch (message_type) {
             case MT_RAFT_CLUSTER_JOIN_RPC:
@@ -803,7 +813,7 @@ int raft_submit(int value)
 {
     if (cm.machine.state != RS_LEADER) {
         // forward to LEADER
-        log_info("Received new value, forwarding to LEADER");
+        raft_info("received command, forwarding to leader");
         const raft_message_t message = {.type = MT_RAFT_FORWARD_VALUE_RPC,
                                         .forward_value_rpc = {.value = value}};
         send_raft_message(cm.sock_fd,
@@ -811,7 +821,7 @@ int raft_submit(int value)
         return -1;
     }
 
-    log_info("Received value %d", value);
+    raft_info("received command %d", value);
     int submit_index  = cm.machine.log.length;
 
     log_entry_t entry = {.term = cm.machine.current_term, .value = value};
