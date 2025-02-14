@@ -1,4 +1,5 @@
 #include "config.h"
+#include "hash.h"
 #include "logger.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -20,10 +21,7 @@ static config_entry_t *config_map[BUCKET_SIZE] = {0};
 // Simple hash function for string keys
 static unsigned int hash(const char *key)
 {
-    unsigned int h = 0;
-    while (*key)
-        h = (h * 31) + *(key++);
-    return h % BUCKET_SIZE;
+    return simple_hash((const uint8_t *)key) % BUCKET_SIZE;
 }
 
 void config_set(const char *key, const char *value)

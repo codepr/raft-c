@@ -1,6 +1,7 @@
 #include "cluster.h"
 #include "binary.h"
 #include "encoding.h"
+#include "hash.h"
 #include "logger.h"
 #include "raft.h"
 #include <arpa/inet.h>
@@ -111,24 +112,15 @@ typedef struct {
 static hashring_t ring = {0};
 
 // Basic Murmur3 hash function for simplicity
-static uint32_t murmur3(const char *key, uint32_t seed)
+static inline uint32_t makehash(const char *key, uint32_t seed)
 {
-    uint32_t h = seed;
-    while (*key) {
-        h ^= (uint8_t)(*key++);
-        h *= 0x5bd1e995;
-        h ^= h >> 15;
-    }
-    h ^= h >> 13;
-    h *= 0x5bd1e995;
-    h ^= h >> 15;
-    return h;
+    return murmur3_hash((const uint8_t *)key, seed);
 }
 
 /* Lookup function */
 static cluster_node_t *hashring_lookup(const char *key)
 {
-    uint32_t hash = murmur3(key, 0);
+    uint32_t hash = makehash(key, 0);
 
     for (size_t i = 0; i < ring.num_vnodes; ++i) {
         if (ring.vnodes[i].hash >= hash)
@@ -162,7 +154,7 @@ void hashring_init(const cluster_node_t *shards, size_t num_shards)
             char buf[64];
             snprintf(buf, sizeof(buf), "%s:%d-%zu", shards[i].ip,
                      shards[i].port, v);
-            ring.vnodes[vnode_count].hash     = murmur3(buf, 0);
+            ring.vnodes[vnode_count].hash     = makehash(buf, 0);
             ring.vnodes[vnode_count].shard_id = i;
             ++vnode_count;
         }
