@@ -781,7 +781,7 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
             remaining_us = current_micros() - last_update_time_us;
             // We're in RS_CANDIDATE
             // state, starting an election
-            if (remaining_s > select_timeout_s) {
+            if (remaining_s >= select_timeout_s) {
                 if (remaining_us >= select_timeout_us) {
                     transition_to_candidate();
                     start_election(sock_fd);

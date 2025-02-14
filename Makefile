@@ -11,18 +11,21 @@ CFLAGS=-Wall					\
 	   -Wno-gnu-zero-variadic-macro-arguments
 LDFLAGS = -L. -lraft
 
-RAFT_C_SRC = time_util.c \
-			 config.c	 \
-			 binary.c	 \
-			 storage.c	 \
-			 encoding.c	 \
-			 cluster.c	 \
-			 raft.c		 \
-			 app_server.c
+RAFT_C_SRC = src/time_util.c \
+			 src/config.c	 \
+			 src/binary.c	 \
+			 src/storage.c	 \
+			 src/encoding.c	 \
+			 src/cluster.c	 \
+			 src/raft.c		 \
+			 src/app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
 
-LIB_SOURCES = binary.c storage.c encoding.c raft.c
+LIB_SOURCES = src/binary.c	 \
+			  src/storage.c	 \
+			  src/encoding.c \
+			  src/raft.c
 LIB_OBJECTS = $(LIB_SOURCES:.c=.o)
 
 all: $(RAFT_C_EXEC)
