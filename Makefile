@@ -12,14 +12,15 @@ CFLAGS=-Wall                                  \
        -Ilib
 LDFLAGS = -L. -lraft
 
-RAFT_C_SRC = src/time_util.c \
-             src/config.c    \
-             src/binary.c    \
-             src/storage.c   \
-             src/encoding.c  \
-             src/cluster.c   \
-             src/raft.c      \
-             src/hash.c      \
+RAFT_C_SRC = src/time_util.c  \
+             src/config.c     \
+             src/binary.c     \
+             src/storage.c    \
+             src/encoding.c   \
+             src/cluster.c    \
+             src/raft.c       \
+             src/hash.c       \
+             src/file_chunk.c \
              src/app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
