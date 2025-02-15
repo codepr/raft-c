@@ -23,4 +23,13 @@ int file_chunk_buffered_read(const char *path, buffered_chunk_t *file);
 
 void file_chunk_buffered_close(buffered_chunk_t *file);
 
+typedef struct {
+    file_chunk_t *items;
+    size_t capacity;
+    size_t length;
+} file_chunk_array_t;
+
+int file_chunk_split_file(const char name[FILENAME_SIZE], size_t size,
+                          file_chunk_array_t *array);
+
 #endif
