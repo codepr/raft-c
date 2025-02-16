@@ -139,7 +139,7 @@ typedef struct raft_message {
  **/
 typedef struct raft_encoding {
     ssize_t (*raft_message_write)(uint8_t *buf, const raft_message_t *rm);
-    message_type_t (*raft_message_read)(const uint8_t *buf, raft_message_t *rm);
+    ssize_t (*raft_message_read)(const uint8_t *buf, raft_message_t *rm);
 } raft_encoding_t;
 
 void raft_set_encoding(raft_encoding_t *backend);

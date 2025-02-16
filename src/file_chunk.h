@@ -1,15 +1,17 @@
 #ifndef FILE_CHUNK_H
 #define FILE_CHUNK_H
 
+#include "hash.h"
 #include <stdio.h>
 #include <stdlib.h>
 
 #define FILENAME_SIZE 255
 
-typedef struct {
+typedef struct file_chunk {
     char name[FILENAME_SIZE];
     uint8_t *data;
     size_t size;
+    uint8_t hash[SHA256_SIZE];
 } file_chunk_t;
 
 typedef struct {

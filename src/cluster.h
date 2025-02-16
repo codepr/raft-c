@@ -24,7 +24,7 @@ typedef struct {
 
 typedef enum { CM_CLUSTER_JOIN, CM_CLUSTER_DATA } cm_type_t;
 
-typedef struct {
+typedef struct cluster_message {
     cm_type_t type;
     char key[MAX_KEY_SIZE];
     cluster_payload_t payload;
@@ -36,8 +36,7 @@ typedef struct {
  **/
 typedef struct cluster_encoding {
     ssize_t (*cluster_message_write)(uint8_t *buf, const cluster_message_t *cm);
-    cm_type_t (*cluster_message_read)(const uint8_t *buf,
-                                      cluster_message_t *cm);
+    ssize_t (*cluster_message_read)(const uint8_t *buf, cluster_message_t *cm);
 } cluster_encoding_t;
 
 typedef struct {

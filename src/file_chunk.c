@@ -4,25 +4,24 @@
 
 int file_chunk_buffered_read(const char *path, buffered_chunk_t *file)
 {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
+    file->fp = fopen(path, "rb");
+    if (!file->fp) {
         perror("Failed to open file");
         return -1;
     }
 
-    fseek(fp, 0, SEEK_END);
-    file->chunk.size = ftell(fp);
-    rewind(fp);
+    fseek(file->fp, 0, SEEK_END);
+    file->chunk.size = ftell(file->fp);
+    rewind(file->fp);
 
     file->chunk.data = malloc(file->chunk.size);
     if (!file->chunk.data) {
         perror("Memory allocation failed");
-        fclose(fp);
+        fclose(file->fp);
         return -1;
     }
 
-    fread(file->chunk.data, file->chunk.size, 1, fp);
-    fclose(fp);
+    fread(file->chunk.data, file->chunk.size, 1, file->fp);
 
     strncpy(file->chunk.name, path, sizeof(file->chunk.name));
 
@@ -31,20 +30,20 @@ int file_chunk_buffered_read(const char *path, buffered_chunk_t *file)
 
 int file_chunk_buffered_write(buffered_chunk_t *file)
 {
-    FILE *fp = fopen(file->chunk.name, "wb");
-    if (!fp) {
+    file->fp = fopen(file->chunk.name, "wb");
+    if (!file->fp) {
         perror("Failed to open file");
         return -1;
     }
 
-    fwrite(file->chunk.data, file->chunk.size, 1, fp);
-    fclose(fp);
+    fwrite(file->chunk.data, file->chunk.size, 1, file->fp);
 
     return 1;
 }
 
 void file_chunk_buffered_close(buffered_chunk_t *file)
 {
+    fclose(file->fp);
     free(file->chunk.data);
     file->chunk.data = NULL;
 }
@@ -69,6 +68,8 @@ int file_chunk_split_file(const char name[FILENAME_SIZE], size_t size,
         da_append(array, chunk);
         memset(&chunk, 0x00, sizeof(chunk));
     }
+
+    fclose(fp);
 
     return 1;
 }

@@ -5,7 +5,6 @@
 #include "storage.h"
 #include "time_util.h"
 #include <arpa/inet.h>
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -706,8 +705,8 @@ void raft_server_start(const struct sockaddr_in *peer, const char *store_dest)
                                                    (struct sockaddr *)&peer_addr, &addr_len);
             if (n < 0)
                 raft_error("recvfrom error: %s", strerror(errno));
-            message_type_t message_type = raft_decode(buf, &raft_message);
-            switch (message_type) {
+            raft_decode(buf, &raft_message);
+            switch (raft_message.type) {
             case MT_RAFT_CLUSTER_JOIN_RPC:
                 handle_cluster_join_rpc(sock_fd, &raft_message.add_node_rpc);
                 break;
