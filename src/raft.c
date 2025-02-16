@@ -2,6 +2,7 @@
 #include "darray.h"
 #include "encoding.h"
 #include "logger.h"
+#include "network.h"
 #include "storage.h"
 #include "time_util.h"
 #include <arpa/inet.h>
@@ -18,84 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define RANDOM(a, b) rand() % ((b) + 1 - (a)) + (a)
-
-/**
- ** Cluster communication and management - UDP network utility functions
- **
- ** The RAFT machine will be implemented by using UDP as the transport layer,
- ** making it lightweight and connection-less. We're don't really care about
- ** delivery guarantee ** and the communication is simplified.
- **/
-
-static int set_nonblocking(int fd)
-{
-    int flags, result;
-    flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1)
-        return -1;
-
-    result = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    if (result == -1)
-        return -1;
-
-    return 0;
-}
-
-static char *get_ip_str(const struct sockaddr_in *sa, char *s, size_t maxlen)
-{
-    switch (sa->sin_family) {
-    case AF_INET:
-        inet_ntop(AF_INET, &sa->sin_addr, s, maxlen);
-        break;
-
-    default:
-        strncpy(s, "Unknown AF", maxlen);
-        return NULL;
-    }
-
-    return s;
-}
-
-static int udp_listen(const char *host, int port)
-{
-
-    int listen_fd               = -1;
-    const struct addrinfo hints = {.ai_family   = AF_INET,
-                                   .ai_socktype = SOCK_DGRAM,
-                                   .ai_flags    = AI_PASSIVE};
-    struct addrinfo *result, *rp;
-    char port_string[6];
-
-    snprintf(port_string, 6, "%d", port);
-
-    if (getaddrinfo(host, port_string, &hints, &result) != 0)
-        return -1;
-
-    for (rp = result; rp != NULL; rp = rp->ai_next) {
-        listen_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (listen_fd < 0)
-            continue;
-
-        if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &(int){1},
-                       sizeof(int)) < 0)
-            return -1;
-
-        /* Bind it to the addr:port opened on the network interface */
-        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) == 0)
-            break; // successful bind
-        close(listen_fd);
-    }
-
-    freeaddrinfo(result);
-    if (!rp)
-        return -1;
-
-    if (set_nonblocking(listen_fd) < 0)
-        return -1;
-
-    return listen_fd;
-}
+#define RANDOM(a, b)        rand() % ((b) + 1 - (a)) + (a)
 
 /**
  ** Raft machine State, see section 5.2 of the paper for a summary

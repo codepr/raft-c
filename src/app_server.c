@@ -2,6 +2,7 @@
 #include "cluster.h"
 #include "config.h"
 #include "logger.h"
+#include "network.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,82 +16,6 @@
 
 #define BACKLOG        128
 #define CLIENT_TIMEOUT 10000
-
-static int set_nonblocking(int fd)
-{
-    int flags, result;
-    flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1)
-        return -1;
-
-    result = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    if (result == -1)
-        return -1;
-
-    return 0;
-}
-
-static int tcp_listen(const char *host, int port)
-{
-    int listen_fd               = -1;
-    const struct addrinfo hints = {.ai_family   = AF_UNSPEC,
-                                   .ai_socktype = SOCK_STREAM,
-                                   .ai_flags    = AI_PASSIVE};
-    struct addrinfo *result, *rp;
-    char port_string[6];
-
-    snprintf(port_string, 6, "%d", port);
-
-    if (getaddrinfo(host, port_string, &hints, &result) != 0)
-        return -1;
-
-    for (rp = result; rp != NULL; rp = rp->ai_next) {
-        listen_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (listen_fd < 0)
-            continue;
-
-        if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &(int){1},
-                       sizeof(int)) < 0)
-            return -1;
-
-        /* Bind it to the addr:port opened on the network interface */
-        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) == 0)
-            break; // successful bind
-        close(listen_fd);
-    }
-
-    freeaddrinfo(result);
-    if (!rp)
-        return -1;
-
-    if (set_nonblocking(listen_fd) < 0)
-        return -1;
-
-    if (listen(listen_fd, BACKLOG) != 0)
-        return -1;
-
-    return listen_fd;
-}
-
-static int tcp_accept(int server_fd)
-{
-    int fd;
-    struct sockaddr_in addr;
-    socklen_t addrlen = sizeof(addr);
-
-    fd                = accept(server_fd, (struct sockaddr *)&addr, &addrlen);
-    if (fd <= 0)
-        goto err;
-
-    if (set_nonblocking(fd) < 0)
-        goto err;
-
-    return fd;
-
-err:
-    log_error("server_accept -> accept() %s", strerror(errno));
-    return -1;
-}
 
 static void server_start(int server_fd, int cluster_fd)
 {

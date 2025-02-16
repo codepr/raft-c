@@ -3,6 +3,7 @@
 #include "encoding.h"
 #include "hash.h"
 #include "logger.h"
+#include "network.h"
 #include "raft.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -13,71 +14,13 @@
 // Global hashring, initializing to 0 (zero-initialization).
 static cluster_t cluster = {0};
 
-static int set_nonblocking(int fd)
+static int cluster_tcp_connect(const cluster_node_t *node, int nonblocking)
 {
-    int flags, result;
-    flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1)
-        return -1;
-
-    result = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    if (result == -1)
-        return -1;
-
-    return 0;
+    return tcp_connect(node->ip, node->port, nonblocking);
 }
 
-static int tcp_connect(const cluster_node_t *node, int nonblocking)
-{
-
-    int s, retval = -1;
-    struct addrinfo *servinfo, *p;
-    const struct addrinfo hints = {.ai_family   = AF_UNSPEC,
-                                   .ai_socktype = SOCK_STREAM,
-                                   .ai_flags    = AI_PASSIVE};
-
-    char port_string[6];
-    snprintf(port_string, sizeof(port_string), "%d", node->port);
-
-    if (getaddrinfo(node->ip, port_string, &hints, &servinfo) != 0)
-        return -1;
-
-    for (p = servinfo; p != NULL; p = p->ai_next) {
-        /* Try to create the socket and to connect it.
-         * If we fail in the socket() call, or on connect(), we retry with
-         * the next entry in servinfo. */
-        if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
-            continue;
-
-        /* Try to connect. */
-        if (connect(s, p->ai_addr, p->ai_addrlen) == -1) {
-            close(s);
-            break;
-        }
-
-        /* If we ended an iteration of the for loop without errors, we
-         * have a connected socket. Let's return to the caller. */
-        retval = s;
-        break;
-    }
-
-    // Set now non-blocking so it's possible to block on the connect and have a
-    // ready-to-write socket immediately
-    if (nonblocking && set_nonblocking(retval) < 0)
-        goto err;
-
-    freeaddrinfo(servinfo);
-    return retval; /* Will be -1 if no connection succeded. */
-
-err:
-
-    close(s);
-    perror("socket(2) opening socket failed");
-    return -1;
-}
-
-static ssize_t tcp_send(const cluster_node_t *node,
-                        const cluster_message_t *message)
+static ssize_t cluster_tcp_send(const cluster_node_t *node,
+                                const cluster_message_t *message)
 {
     // TODO temporary
     uint8_t buf[BUFSIZ] = {0};
@@ -85,7 +28,7 @@ static ssize_t tcp_send(const cluster_node_t *node,
     return send(node->sock_fd, buf, length, 0);
 }
 
-static void tcp_close(cluster_node_t *node)
+static void cluster_tcp_close(cluster_node_t *node)
 {
     if (node->sock_fd < 0)
         return;
@@ -205,9 +148,9 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
     encoding->cluster_message_write = cluster_bin_message_write;
 
     cluster_transport_t *transport  = calloc(1, sizeof(*transport));
-    transport->connect              = tcp_connect;
-    transport->close                = tcp_close;
-    transport->send_data            = tcp_send;
+    transport->connect              = cluster_tcp_connect;
+    transport->close                = cluster_tcp_close;
+    transport->send_data            = cluster_tcp_send;
 
     cluster.encoding                = encoding;
     cluster.transport               = transport;

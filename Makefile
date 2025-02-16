@@ -20,6 +20,7 @@ RAFT_C_SRC = src/time_util.c  \
              src/cluster.c    \
              src/raft.c       \
              src/hash.c       \
+             src/network.c    \
              src/file_chunk.c \
              src/app_server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
