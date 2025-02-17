@@ -11,6 +11,7 @@ typedef struct merkle_node {
     uint8_t *data; // Only for leaves
 } merkle_node_t;
 
+merkle_node_t *merkle_tree_leaf(const uint8_t *data, size_t chunk_size);
 merkle_node_t *merkle_tree_build(merkle_node_t **leaves, size_t count);
 void merkle_tree_free(merkle_node_t *root);
 

@@ -169,7 +169,7 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
     strncpy(opts.store, store, BUFSIZ);
 
     const cluster_node_t *replica_node =
-        type == NT_SHARD ? &nodes[id] : &replicas[id];
+        type == NT_SHARD || type == NT_METADATA ? &nodes[id] : &replicas[id];
 
     // Start raft replicas
     opts.saddr.sin_port = htons(replica_node->port);

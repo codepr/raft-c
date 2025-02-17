@@ -334,13 +334,26 @@ ssize_t cluster_bin_message_read(const uint8_t *buf, cluster_message_t *cm)
     return bytes;
 }
 
+ssize_t cdfs_bin_header_write(uint8_t *buf, const cdfs_header_t *h)
+{
+    size_t bytes = write_u8(buf++, h->type);
+    bytes += write_i32(buf, h->size);
+    return bytes;
+}
+
+ssize_t cdfs_bin_header_read(const uint8_t *buf, cdfs_header_t *h)
+{
+    h->type = read_u8(buf++);
+    h->size = read_i32(buf);
+    return sizeof(uint8_t) + sizeof(int32_t);
+}
+
 ssize_t cdfs_bin_chunk_write(uint8_t *buf, const cdfs_message_t *cm)
 {
     size_t filename_size = 0;
-    ssize_t bytes        = write_u8(buf++, cm->type);
-    bytes += write_i32(buf, cm->size);
-    buf += sizeof(int32_t);
-    switch (cm->type) {
+    ssize_t bytes        = cdfs_bin_header_write(buf, &cm->header);
+    buf += bytes;
+    switch (cm->header.type) {
     case CMT_PUSH_FILE:
     case CMT_PULL_FILE:
         // Filename size, this because the store message is followed by the
@@ -350,6 +363,7 @@ ssize_t cdfs_bin_chunk_write(uint8_t *buf, const cdfs_message_t *cm)
         buf += sizeof(uint8_t);
         memcpy(buf, cm->filename, filename_size);
         bytes += filename_size;
+        break;
     case CMT_PUSH_CHUNK:
     case CMT_PULL_CHUNK:
         // Filename size, this because the store message is followed by the
@@ -362,10 +376,9 @@ ssize_t cdfs_bin_chunk_write(uint8_t *buf, const cdfs_message_t *cm)
         buf += filename_size;
         // Hash size, this because the store message is followed by the
         // stream of bytes representing the content of the transmitted file
-        bytes += write_u8(buf++, SHA256_SIZE);
-        buf += sizeof(uint8_t);
         memcpy(buf, cm->chunk.hash, SHA256_SIZE);
         bytes += SHA256_SIZE;
+        break;
     }
 
     return bytes;
@@ -374,25 +387,28 @@ ssize_t cdfs_bin_chunk_write(uint8_t *buf, const cdfs_message_t *cm)
 ssize_t cdfs_bin_chunk_read(const uint8_t *buf, cdfs_message_t *cm)
 {
     size_t filename_size = 0;
-    size_t hash_size     = 0;
-    cm->type             = read_u8(buf++);
-    cm->size             = read_i32(buf);
-    buf += sizeof(int32_t);
-    switch (cm->type) {
+    ssize_t bytes        = cdfs_bin_header_read(buf, &cm->header);
+    buf += bytes;
+    switch (cm->header.type) {
     case CMT_PUSH_FILE:
     case CMT_PULL_FILE:
         filename_size = read_i32(buf);
         buf += sizeof(int32_t);
+        bytes += sizeof(int32_t);
         memcpy(cm->filename, buf, filename_size);
+        bytes += filename_size;
+        break;
     case CMT_PUSH_CHUNK:
     case CMT_PULL_CHUNK:
         filename_size = read_i32(buf);
         buf += sizeof(int32_t);
+        bytes += sizeof(int32_t);
         memcpy(cm->chunk.filename, buf, filename_size);
+        bytes += filename_size;
         buf += filename_size;
-        hash_size = read_i32(buf);
-        buf += sizeof(int32_t);
-        memcpy(cm->chunk.hash, buf, hash_size);
+        memcpy(cm->chunk.hash, buf, SHA256_SIZE);
+        bytes += SHA256_SIZE;
+        break;
     }
-    return cm->type;
+    return bytes;
 }

@@ -12,7 +12,7 @@ typedef struct config_entry {
     struct config_entry *next;
 } config_entry_t;
 
-typedef enum { NT_SHARD, NT_REPLICA } node_type_t;
+typedef enum { NT_SHARD, NT_METADATA, NT_REPLICA } node_type_t;
 
 int config_load(const char *filepath);
 void config_set(const char *key, const char *value);

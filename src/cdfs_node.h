@@ -11,9 +11,13 @@ typedef enum {
     CMT_PULL_CHUNK
 } cdfs_message_type;
 
-typedef struct cdfs_message {
+typedef struct cdfs_header {
     cdfs_message_type type;
     size_t size;
+} cdfs_header_t;
+
+typedef struct cdfs_message {
+    cdfs_header_t header;
     union {
         char filename[FILENAME_SIZE];
         struct {

@@ -1,6 +1,7 @@
-#include "binary.h"
+#include "cdfs_node.h"
 #include "cluster.h"
 #include "config.h"
+#include "encoding.h"
 #include "logger.h"
 #include "network.h"
 #include <arpa/inet.h>
@@ -14,22 +15,17 @@
 #include <time.h>
 #include <unistd.h>
 
-#define BACKLOG        128
-#define CLIENT_TIMEOUT 10000
+#define HEADERSIZE sizeof(uint8_t) + sizeof(int32_t)
 
 static void server_start(int server_fd, int cluster_fd)
 {
     fd_set read_fds;
     int max_fd     = cluster_fd > server_fd ? cluster_fd : server_fd;
     int num_events = 0, i = 0;
-    useconds_t join_timeout_us     = 500000;
-    useconds_t remaining_us        = 0;
-    useconds_t last_update_time_us = 0;
-    struct timeval tv              = {0, join_timeout_us};
-    unsigned char buf[BUFSIZ]      = {0};
-    int client_fds[FD_SETSIZE]     = {0};
-    int cluster_fds[FD_SETSIZE]    = {0};
-    cluster_message_t message      = {0};
+    unsigned char buf[BUFSIZ]   = {0};
+    int client_fds[FD_SETSIZE]  = {0};
+    int cluster_fds[FD_SETSIZE] = {0};
+    cluster_message_t cm        = {0};
 
     // Initialize client_fds array
     for (i = 0; i < FD_SETSIZE; i++) {
@@ -61,13 +57,13 @@ static void server_start(int server_fd, int cluster_fd)
             }
         }
 
-        num_events = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
+        num_events = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
         if (num_events < 0)
             log_critical("select() error: %s", strerror(errno));
 
         if (FD_ISSET(server_fd, &read_fds)) {
             // New connection
-            int client_fd = tcp_accept(server_fd);
+            int client_fd = tcp_accept(server_fd, 1);
             if (client_fd < 0) {
                 log_error("accept() error: %s", strerror(errno));
                 continue;
@@ -87,7 +83,7 @@ static void server_start(int server_fd, int cluster_fd)
             }
         } else if (cluster_fd >= 0 && FD_ISSET(cluster_fd, &read_fds)) {
             // New cluster node connected
-            int node_fd = tcp_accept(cluster_fd);
+            int node_fd = tcp_accept(cluster_fd, 1);
             if (node_fd < 0) {
                 log_error("accept() error: %s", strerror(errno));
                 continue;
@@ -109,29 +105,63 @@ static void server_start(int server_fd, int cluster_fd)
 
         for (i = 0; i < FD_SETSIZE; ++i) {
             if (client_fds[i] >= 0 && FD_ISSET(client_fds[i], &read_fds)) {
-                // TODO read data here
-                ssize_t n = recv(client_fds[i], buf, sizeof(buf), 0);
+                ssize_t n = recv_nonblocking(client_fds[i], buf, HEADERSIZE);
                 if (n <= 0) {
                     close(client_fds[i]);
                     client_fds[i] = -1;
                     log_info("Client disconnected");
                     continue;
                 }
-                // TODO read message here, assuming integers from a netcat
-                // client or telnet, just plain bytes
+                // TODO check for message size against the buffer
+                cdfs_header_t header = {0};
+                cdfs_bin_header_read(buf, &header);
 
-                char key[MAX_KEY_SIZE]        = {0};
-                uint8_t value[MAX_VALUE_SIZE] = {0};
-                int val                       = 0;
-                sscanf((const char *)buf, "SET %s %d", key, &val);
-                // int value = atoi((const char *)buf);
+                n = recv_nonblocking(client_fds[i], buf, header.size);
+                if (n <= 0) {
+                    close(client_fds[i]);
+                    client_fds[i] = -1;
+                    log_info("Client disconnected");
+                    continue;
+                }
+                cdfs_message_t message = {0};
+                cdfs_bin_chunk_read(buf, &message);
 
-                message.type = CM_CLUSTER_DATA;
-                strncpy(message.key, key, MAX_KEY_SIZE);
-                write_i32(value, val);
-                message.payload.data = value;
-                message.payload.size = sizeof(int);
-                cluster_submit(&message);
+                switch (header.type) {
+                case CMT_PUSH_FILE:
+                    // TODO - Metadata node, redirect or error if not
+                    // - split the file into chunks
+                    // - generate merkle tree
+                    // - store the file name and map it to locations
+                    //     filename -> {hash, [nodes]}
+                    break;
+                case CMT_PULL_FILE:
+                    // TODO - Metadata node, redirect or error if not
+                    // - retrieve filename key
+                    // - async retrieve all chunks from each location
+                    // - merge chunks and send file back to the client
+                    // Alternative
+                    // - send list of locations and allow client to connect and
+                    //   retrieve all the chunks
+                    break;
+                case CMT_PUSH_CHUNK:
+                    // - TODO - Shard node, redirect or error if not
+                    // - deserialized
+                    // - store filename -> {hash, chunk}
+                    break;
+                case CMT_PULL_CHUNK:
+                    // - TODO - Shard node, redirect or error if not
+                    // - retrieve filename -> {hash, chunk}
+                    // - serialize and send back to requester (generally a
+                    //   metadata node)
+                    break;
+                }
+
+                // cm.type = CM_CLUSTER_DATA;
+                // strncpy(cm.key, key, MAX_KEY_SIZE);
+                // write_i32(value, val);
+                // cm.payload.data = value;
+                // cm.payload.size = sizeof(int);
+                // cluster_submit(&cm);
             } else if (cluster_fds[i] >= 0 &&
                        FD_ISSET(cluster_fds[i], &read_fds)) {
                 ssize_t n = recv(cluster_fds[i], buf, sizeof(buf), 0);
@@ -142,28 +172,16 @@ static void server_start(int server_fd, int cluster_fd)
                     continue;
                 }
 
-                cluster_message_read(buf, &message);
+                cluster_message_read(buf, &cm);
 
-                switch (message.type) {
+                switch (cm.type) {
                 case CM_CLUSTER_JOIN:
                     break;
                 case CM_CLUSTER_DATA:
-                    cluster_submit(&message);
+                    cluster_submit(&cm);
                     break;
                 }
             }
-        }
-
-        remaining_us = current_micros() - last_update_time_us;
-        if (remaining_us >= join_timeout_us) {
-            // TODO try to connect to the cluster nodes here
-            join_timeout_us     = 500000;
-            last_update_time_us = current_micros();
-            tv.tv_sec           = 0;
-            tv.tv_usec          = join_timeout_us;
-        } else {
-            tv.tv_sec  = 0;
-            tv.tv_usec = join_timeout_us - remaining_us;
         }
     }
 }
@@ -243,7 +261,7 @@ int main(int argc, char **argv)
     cluster_node_t this = {0};
     cluster_node_from_string(config_get("host"), &this);
 
-    server_fd = tcp_listen(this.ip, this.port);
+    server_fd = tcp_listen(this.ip, this.port, 1);
     if (server_fd < 0)
         exit(EXIT_FAILURE);
 
@@ -251,9 +269,9 @@ int main(int argc, char **argv)
 
     if (config_get_enum("type") == NT_SHARD) {
         if (config.port > 0)
-            cluster_fd = tcp_listen("127.0.0.1", config.port);
+            cluster_fd = tcp_listen("127.0.0.1", config.port, 1);
         else
-            cluster_fd = tcp_listen(nodes[node_id].ip, nodes[node_id].port);
+            cluster_fd = tcp_listen(nodes[node_id].ip, nodes[node_id].port, 1);
 
         if (cluster_fd < 0)
             exit(EXIT_FAILURE);

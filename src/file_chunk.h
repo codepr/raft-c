@@ -31,7 +31,7 @@ typedef struct {
     size_t length;
 } file_chunk_array_t;
 
-int file_chunk_split_file(const char name[FILENAME_SIZE], size_t size,
-                          file_chunk_array_t *array);
+int file_chunk_split(const char name[FILENAME_SIZE], size_t size,
+                     file_chunk_array_t *array);
 
 #endif

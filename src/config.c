@@ -19,7 +19,7 @@
 static config_entry_t *config_map[BUCKET_SIZE] = {0};
 
 // Simple hash function for string keys
-static unsigned int hash(const char *key)
+static inline unsigned int hash(const char *key)
 {
     return simple_hash((const uint8_t *)key) % BUCKET_SIZE;
 }
@@ -105,6 +105,8 @@ int config_get_enum(const char *key)
         return NT_SHARD;
     if (strncasecmp(value, "replica", MAX_VALUE_SIZE) == 0)
         return NT_REPLICA;
+    if (strncasecmp(value, "metadata", MAX_VALUE_SIZE) == 0)
+        return NT_METADATA;
     return -1;
 }
 

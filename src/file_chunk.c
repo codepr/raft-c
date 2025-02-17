@@ -48,8 +48,8 @@ void file_chunk_buffered_close(buffered_chunk_t *file)
     file->chunk.data = NULL;
 }
 
-int file_chunk_split_file(const char name[FILENAME_SIZE], size_t size,
-                          file_chunk_array_t *array)
+int file_chunk_split(const char name[FILENAME_SIZE], size_t size,
+                     file_chunk_array_t *array)
 {
     FILE *fp = fopen(name, "rb");
     if (!fp) {

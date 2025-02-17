@@ -41,7 +41,7 @@ char *get_ip_str(const struct sockaddr_in *sa, char *s, size_t maxlen)
     return s;
 }
 
-int tcp_accept(int server_fd)
+int tcp_accept(int server_fd, int nonblocking)
 {
     int fd;
     struct sockaddr_in addr;
@@ -51,7 +51,7 @@ int tcp_accept(int server_fd)
     if (fd <= 0)
         goto err;
 
-    if (set_nonblocking(fd) < 0)
+    if (nonblocking && set_nonblocking(fd) < 0)
         goto err;
 
     return fd;
@@ -61,7 +61,7 @@ err:
     return -1;
 }
 
-int tcp_listen(const char *host, int port)
+int tcp_listen(const char *host, int port, int nonblocking)
 {
     int listen_fd               = -1;
     const struct addrinfo hints = {.ai_family   = AF_UNSPEC,
@@ -94,7 +94,7 @@ int tcp_listen(const char *host, int port)
     if (!rp)
         return -1;
 
-    if (set_nonblocking(listen_fd) < 0)
+    if (nonblocking && set_nonblocking(listen_fd) < 0)
         return -1;
 
     if (listen(listen_fd, BACKLOG) != 0)
@@ -174,6 +174,36 @@ ssize_t send_nonblocking(int fd, const unsigned char *buf, size_t len)
 err:
 
     fprintf(stderr, "send(2) - error sending data: %s\n", strerror(errno));
+    return -1;
+}
+
+ssize_t recv_nonblocking(int fd, unsigned char *buf, size_t len)
+{
+    ssize_t n     = 0;
+    ssize_t total = 0;
+
+    while (total < len) {
+        if ((n = recv(fd, buf, len - total, 0)) < 0) {
+            total = total == 0 ? -1 : total;
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break;
+            else
+                goto err;
+        }
+
+        if (n == 0) {
+            return total;
+        }
+
+        buf += n;
+        total += n;
+    }
+
+    return total;
+
+err:
+
+    fprintf(stderr, "recv(2) - error reading data: %s\n", strerror(errno));
     return -1;
 }
 

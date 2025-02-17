@@ -12,7 +12,7 @@ static void generate_hash(const uint8_t *data, size_t len,
     out[SHA256_SIZE * 2] = '\0';
 }
 
-static merkle_node_t *merkle_tree_leaf(const uint8_t *data, size_t chunk_size)
+merkle_node_t *merkle_tree_leaf(const uint8_t *data, size_t chunk_size)
 {
     merkle_node_t *node = calloc(1, sizeof(*node));
     node->data          = calloc(1, chunk_size);
