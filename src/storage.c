@@ -1,7 +1,82 @@
 #include "storage.h"
 #include "binary.h"
 #include "darray.h"
+#include <errno.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+int makedir(const char *path)
+{
+    struct stat st = {0};
+
+    if (stat(path, &st) == -1) {
+        return mkdir(path, 0700);
+    }
+    return 0;
+}
+
+int buffer_read_file(FILE *fp, buffer_t *b)
+{
+    /* Get the buffer size */
+    if (fseek(fp, 0, SEEK_END) < 0) {
+        log_error("Error reading file: fseek %s", strerror(errno));
+        return -1;
+    }
+
+    size_t size = ftell(fp);
+
+    /* Set position of stream to the beginning */
+    rewind(fp);
+
+    /* Allocate the buffer (no need to initialize it with calloc) */
+    b->data = calloc(size + 1, sizeof(uint8_t));
+
+    /* Read the file into the buffer */
+    fread(b->data, 1, size, fp);
+
+    b->size       = size;
+
+    /* NULL-terminate the buffer */
+    b->data[size] = '\0';
+    return 0;
+}
+
+ssize_t read_file(FILE *fp, uint8_t *buf)
+{
+    /* Get the buffer size */
+    if (fseek(fp, 0, SEEK_END) < 0) {
+        perror("fseek");
+        return -1;
+    }
+
+    ssize_t size = ftell(fp);
+
+    /* Set position of stream to the beginning */
+    rewind(fp);
+
+    /* Read the file into the buffer */
+    fread(buf, 1, size, fp);
+
+    /* NULL-terminate the buffer */
+    buf[size] = '\0';
+    return size;
+}
+
+ssize_t filesize(FILE *fp, long offset)
+{
+    if (fseek(fp, 0, SEEK_END) < 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    ssize_t size = ftell(fp);
+
+    // reset to offset
+    fseek(fp, offset, SEEK_SET);
+    return size;
+}
 
 int file_open(void *context, const char *mode)
 {

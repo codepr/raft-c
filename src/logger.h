@@ -1,7 +1,8 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-#include "time_util.h"
+#include "timeutil.h"
+#include <inttypes.h>
 
 #define LL_DEBUG    0
 #define LL_INFO     1
@@ -14,7 +15,7 @@
 #define LOG(level, level_str, fmt, ...)                                        \
     do {                                                                       \
         if (level >= LOG_LEVEL) {                                              \
-            fprintf(stderr, "%llu %s " fmt "%s", current_seconds(),            \
+            fprintf(stderr, "%" PRIi64 " %s " fmt "%s", current_seconds(),     \
                     level_str __VA_OPT__(, ) __VA_ARGS__, "\n");               \
         }                                                                      \
         if (level == LL_CRITICAL)                                              \
