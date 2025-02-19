@@ -61,6 +61,8 @@ void cluster_start(const cluster_node_t nodes[], size_t num_nodes,
                    const char *store, node_type_t type);
 void cluster_stop(void);
 ssize_t cluster_message_read(const uint8_t *buf, cluster_message_t *cm);
+cluster_node_t *cluster_node_lookup(const char *key);
+int cluster_connect(cluster_node_t *node, int nonblocking);
 int cluster_submit(const cluster_message_t *message);
 
 #endif

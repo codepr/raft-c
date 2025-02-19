@@ -33,6 +33,15 @@ RAFT_LIB_SOURCES = src/binary.c   \
                    src/raft.c
 RAFT_LIB_OBJECTS = $(RAFT_LIB_SOURCES:.c=.o)
 
+CLIENT_SRC = src/cdfs_client.c \
+             src/network.c     \
+             src/encoding.c    \
+             src/binary.c      \
+             src/time_util.c   \
+             src/file_chunk.c
+CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
+CLIENT_EXEC = cdfs-client
+
 all: $(RAFT_C_EXEC)
 
 $(RAFT_C_EXEC): $(RAFT_C_OBJ)
@@ -44,8 +53,12 @@ libraft.so: $(LIB_OBJECTS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(CLIENT_EXEC): $(CLIENT_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
 clean:
 	rm -f $(RAFT_C_OBJ) $(RAFT_C_EXEC) libraft.so
+	rm -f $(CLIENT_OBJ) ($(CLIENT_EXEC)
 
 .PHONY: all clean
 

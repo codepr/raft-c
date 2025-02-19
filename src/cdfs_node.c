@@ -17,6 +17,46 @@
 
 #define HEADERSIZE sizeof(uint8_t) + sizeof(int32_t)
 
+static fd_set write_fds;
+static int max_fd                = 0;
+static int nodes_fds[FD_SETSIZE] = {0};
+
+static void async_broadcast(const file_chunk_t *chunks, size_t num_chunks)
+{
+
+    int num_events = 0;
+    // Initialize client_fds array
+    for (int i = 0; i < FD_SETSIZE; i++)
+        nodes_fds[i] = -1;
+
+    FD_ZERO(&write_fds);
+
+    for (int i = 0; i < num_chunks; i++) {
+        cluster_node_t *node = cluster_node_lookup((char *)chunks[i].hash);
+
+        cluster_connect(node, 1);
+        nodes_fds[i] = node->sock_fd;
+
+        max_fd       = max_fd < node->sock_fd ? node->sock_fd : max_fd;
+
+        FD_SET(node->sock_fd, &write_fds);
+    }
+
+    while (num_chunks > 0) {
+        num_events = select(max_fd + 1, NULL, &write_fds, NULL, NULL);
+        if (num_events < 0)
+            log_critical("select() error: %s", strerror(errno));
+
+        for (int i = 0; i < FD_SETSIZE; ++i) {
+            if (nodes_fds[i] >= 0 && FD_ISSET(nodes_fds[i], &write_fds)) {
+                // TODO send chunks here
+            }
+        }
+    }
+
+    log_info("All chunks uploaded");
+}
+
 static void server_start(int server_fd, int cluster_fd)
 {
     fd_set read_fds;

@@ -200,6 +200,19 @@ ssize_t cluster_message_read(const uint8_t *buf, cluster_message_t *cm)
     return cluster.encoding->cluster_message_read(buf, cm);
 }
 
+cluster_node_t *cluster_node_lookup(const char *key)
+{
+    return hashring_lookup(key);
+}
+
+int cluster_connect(cluster_node_t *node, int nonblocking)
+{
+    if (node->connected)
+        return 0;
+    node->connected = 1;
+    return cluster.transport->connect(node, nonblocking);
+}
+
 int cluster_submit(const cluster_message_t *message)
 {
     cluster_node_t *node = hashring_lookup(message->key);
@@ -215,11 +228,8 @@ int cluster_submit(const cluster_message_t *message)
 
     log_info("Redirecting entry to shard %s:%d", node->ip, node->port);
 
-    if (!node->connected &&
-        (node->sock_fd = cluster.transport->connect(node, 0))) {
-        node->connected = 1;
+    if (!node->connected && (node->sock_fd = cluster_connect(node, 0)))
         log_info("Connected to the target node");
-    }
 
     return cluster.transport->send_data(node, message);
 }
