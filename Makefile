@@ -12,7 +12,8 @@ CFLAGS=-Wall                                  \
        -Ilib
 LDFLAGS = -L. -lraft
 
-RAFT_C_SRC = src/timeutil.c   \
+RAFT_C_SRC = src/timeutil.c    \
+             src/iomux.c       \
              src/config.c      \
              src/binary.c      \
              src/storage.c     \
@@ -21,14 +22,12 @@ RAFT_C_SRC = src/timeutil.c   \
              src/raft.c        \
              src/hash.c        \
              src/network.c     \
-             src/file_chunk.c  \
-             src/merkle_tree.c \
              src/timeseries.c  \
              src/partition.c   \
              src/index.c       \
              src/commitlog.c   \
              src/wal.c         \
-             src/cdfs_node.c
+             src/server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
 
@@ -38,14 +37,13 @@ RAFT_LIB_SOURCES = src/binary.c   \
                    src/raft.c
 RAFT_LIB_OBJECTS = $(RAFT_LIB_SOURCES:.c=.o)
 
-CLIENT_SRC = src/cdfs_client.c \
+CLIENT_SRC = src/client.c \
              src/network.c     \
              src/encoding.c    \
              src/binary.c      \
-             src/timeutil.c   \
-             src/file_chunk.c
+             src/timeutil.c
 CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
-CLIENT_EXEC = cdfs-client
+CLIENT_EXEC = client
 
 all: $(RAFT_C_EXEC)
 
