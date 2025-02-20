@@ -14,6 +14,7 @@ LDFLAGS = -L. -lraft
 
 RAFT_C_SRC = src/timeutil.c    \
              src/iomux.c       \
+             src/parser.c      \
              src/config.c      \
              src/binary.c      \
              src/storage.c     \
@@ -37,15 +38,16 @@ RAFT_LIB_SOURCES = src/binary.c   \
                    src/raft.c
 RAFT_LIB_OBJECTS = $(RAFT_LIB_SOURCES:.c=.o)
 
-CLIENT_SRC = src/client.c \
-             src/network.c     \
-             src/encoding.c    \
-             src/binary.c      \
-             src/timeutil.c
-CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
-CLIENT_EXEC = client
+CLI_SRC = src/client.c      \
+          src/raftcli.c     \
+          src/network.c     \
+          src/encoding.c    \
+          src/binary.c      \
+          src/timeutil.c
+CLI_OBJ = $(CLI_SRC:.c=.o)
+CLI_EXEC = raft-cli
 
-all: $(RAFT_C_EXEC)
+all: $(RAFT_C_EXEC) $(CLI_EXEC)
 
 $(RAFT_C_EXEC): $(RAFT_C_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -56,12 +58,12 @@ libraft.so: $(LIB_OBJECTS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(CLIENT_EXEC): $(CLIENT_OBJ)
+$(CLI_EXEC): $(CLI_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:
 	rm -f $(RAFT_C_OBJ) $(RAFT_C_EXEC) libraft.so
-	rm -f $(CLIENT_OBJ) ($(CLIENT_EXEC)
+	rm -f $(CLI_OBJ) ($(CLI_EXEC)
 
 .PHONY: all clean
 
