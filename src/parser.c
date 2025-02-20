@@ -40,10 +40,10 @@ string_view_t string_view_chop_by_delim(string_view_t *view, const char delim)
 typedef struct {
     string_view_t view;
     size_t length;
-} Lexer;
+} lexer_t;
 
 // Function to get the next token from the lexer
-string_view_t lexer_next(Lexer *l)
+string_view_t lexer_next(lexer_t *l)
 {
     string_view_t lexiom = string_view_chop_by_delim(&l->view, ' ');
     l->length            = l->view.length;
@@ -51,7 +51,7 @@ string_view_t lexer_next(Lexer *l)
 }
 
 // Function to get the next token by a separator from the lexer
-string_view_t lexer_next_by_sep(Lexer *l, char sep)
+string_view_t lexer_next_by_sep(lexer_t *l, char sep)
 {
     string_view_t lexiom = string_view_chop_by_delim(&l->view, sep);
     l->length            = l->view.length;
@@ -59,7 +59,7 @@ string_view_t lexer_next_by_sep(Lexer *l, char sep)
 }
 
 // Function to peek at the next token from the lexer without consuming it
-string_view_t lexer_peek(Lexer *l)
+string_view_t lexer_peek(lexer_t *l)
 {
     size_t length        = l->length;
     string_view_t lexiom = lexer_next(l);
@@ -98,7 +98,7 @@ typedef struct token {
     char value[IDENTIFIER_LENGTH];
 } token_t;
 
-static ssize_t tokenize_create(Lexer *l, token_t *tokens, size_t capacity)
+static ssize_t tokenize_create(lexer_t *l, token_t *tokens, size_t capacity)
 {
     string_view_t token = lexer_next(l);
     size_t i            = 0;
@@ -121,7 +121,7 @@ static ssize_t tokenize_create(Lexer *l, token_t *tokens, size_t capacity)
 }
 
 // Function to tokenize input string into an array of tokens
-static ssize_t tokenize_insert(Lexer *l, token_t *tokens, size_t capacity)
+static ssize_t tokenize_insert(lexer_t *l, token_t *tokens, size_t capacity)
 {
     string_view_t token = lexer_next(l);
     size_t i            = 0;
@@ -156,7 +156,7 @@ static ssize_t tokenize_insert(Lexer *l, token_t *tokens, size_t capacity)
     return i;
 }
 
-static ssize_t tokenize_select(Lexer *l, token_t *tokens, size_t capacity)
+static ssize_t tokenize_select(lexer_t *l, token_t *tokens, size_t capacity)
 {
     string_view_t token = lexer_next(l);
     size_t i            = 0;
@@ -229,7 +229,7 @@ static ssize_t tokenize(const char *query, token_t *tokens, size_t capacity)
 {
     size_t token_count        = 0;
     string_view_t view        = string_view_from_cstring(query);
-    Lexer l                   = {.view = view, .length = view.length};
+    lexer_t l                 = {.view = view, .length = view.length};
     string_view_t first_token = lexer_next(&l);
 
     if (strncmp(first_token.p, "CREATE", first_token.length) == 0)
