@@ -15,6 +15,7 @@
 *.dSYM/
 *.su
 raft-c
+raft-cli
 .clang-tidy
 raft_state.*
 logs
