@@ -18,6 +18,11 @@ long long current_seconds(void)
     return (long long)ts.tv_sec;
 }
 
+int clocktime(struct timespec *ts)
+{
+    return clock_gettime(CLOCK_PROCESS_CPUTIME_ID, ts);
+}
+
 double timespec_seconds(struct timespec *ts)
 {
     return (double)ts->tv_sec + (double)ts->tv_nsec * 1.0e-9;
