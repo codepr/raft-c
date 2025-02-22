@@ -98,6 +98,8 @@ iomux_t *iomux_create(void)
     FD_ZERO(&mux->writefds);
     mux->maxfd = -1;
     mux->nfds  = 0;
+    for (int i = 0; i < NUM_EVENTS; ++i)
+        mux->fds[i] = -1;
     return mux;
 }
 
@@ -137,6 +139,12 @@ int iomux_del(iomux_t *mux, int fd)
 
 int iomux_wait(iomux_t *mux, time_t timeout_ms)
 {
+    FD_ZERO(&mux->readfds);
+    for (int i = 0; i < mux->nfds; ++i) {
+        if (mux->fds[i] == -1)
+            continue;
+        FD_SET(mux->fds[i], &mux->readfds);
+    }
     struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     fd_set rfds       = mux->readfds;
     fd_set wfds       = mux->writefds;
@@ -151,6 +159,7 @@ int iomux_get_event_fd(iomux_t *mux, int index)
 
 iomux_event_t iomux_get_event_flags(iomux_t *mux, int index)
 {
+    int fd             = iomux_get_event_fd(mux, index);
     iomux_event_t mask = 0;
     if (FD_ISSET(fd, &mux->readfds))
         mask |= IOMUX_READ;

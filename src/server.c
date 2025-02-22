@@ -174,6 +174,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
         strncpy(rs.string_response.message, "Err", 4);
         rs.string_response.length = 4;
     } else {
+        log_info("Payload received");
         // Parse into Statement
         statement = ast_parse(rq.query);
         // Execute it
@@ -249,6 +250,7 @@ static int server_start(int serverfd, int clusterfd)
 
                 clientfds[clientfd] = clientfd;
 
+                log_info("New client connected");
                 iomux_add(iomux, clientfd, IOMUX_READ);
 
             } else if (fd == clusterfd) {
@@ -268,6 +270,13 @@ static int server_start(int serverfd, int clusterfd)
 
                 iomux_add(iomux, clusterfd, IOMUX_READ);
             } else if (clientfds[fd] != -1) {
+                ssize_t n = recv_nonblocking(fd, buf, sizeof(buf));
+                if (n <= 0) {
+                    clientfds[fd] = -1;
+                    close(fd);
+                    log_info("Client disconnected\n");
+                    continue;
+                }
                 ssize_t err = handle_client(fd, iomux, buf);
                 if (err <= 0) {
                     close(fd);
@@ -276,6 +285,13 @@ static int server_start(int serverfd, int clusterfd)
                     continue;
                 }
             } else if (clusterfds[fd] != -1) {
+                ssize_t n = recv_nonblocking(fd, buf, sizeof(buf));
+                if (n <= 0) {
+                    clientfds[fd] = -1;
+                    close(fd);
+                    log_info("Client disconnected\n");
+                    continue;
+                }
                 ssize_t err = handle_peer(fd, iomux, buf);
                 if (err <= 0) {
                     close(fd);
