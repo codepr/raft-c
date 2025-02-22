@@ -3,9 +3,7 @@
 
 #include <math.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define IDENTIFIER_LENGTH 64
 #define RECORDS_LENGTH    32
@@ -30,13 +28,50 @@ string_view_t string_view_from_cstring(const char *src);
 // Function to chop a string view by a delimiter and return the remaining view
 string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
 
+/**
+ **  Grammar for the SQL query language
+ **
+ ** COMMAND     ::= CREATE_CMD | INSERT_CMD | SELECT_CMD | DELETE_CMD
+ **
+ ** CREATE_CMD  ::= "CREATE" IDENTIFIER
+ **               | "CREATE" IDENTIFIER "INTO" IDENTIFIER [RETENTION]
+ ** [DUPLICATION]
+ **
+ ** INSERT_CMD  ::= "INSERT" IDENTIFIER "INTO" IDENTIFIER TIMESTAMP VALUE_LIST
+ **
+ ** SELECT_CMD  ::= "SELECT" IDENTIFIER "FROM" IDENTIFIER
+ **                 "RANGE" TIMESTAMP "TO" TIMESTAMP
+ **                 "WHERE" "value" COMPARATOR LITERAL
+ **                 "AGGREGATE" AGG_FUNC "BY" LITERAL
+ **
+ ** DELETE_CMD  ::= "DELETE" IDENTIFIER
+ **               | "DELETE" IDENTIFIER "FROM" IDENTIFIER
+ **
+ ** RETENTION   ::= LITERAL
+ ** DUPLICATION ::= LITERAL
+ ** COMPARATOR  ::= ">" | "<" | "=" | "<=" | ">=" | "!="
+ ** AGG_FUNC    ::= "AVG" | "MIN" | "MAX"
+ ** VALUE_LIST  ::= VALUE ("," VALUE)*
+ ** VALUE       ::= NUMBER
+ ** TIMESTAMP   ::= NUMBER | "*"
+ ** IDENTIFIER  ::= [A-Za-z_][A-Za-z0-9_]*
+ ** LITERAL     ::= STRING | NUMBER
+ **
+ ** E.g.
+ **
+ ** INSERT cputime INTO load * 12.2 * 19.2 829232932 11.56
+ **/
+
 typedef struct token token_t;
 
 // Define aggregate function types
-typedef enum { AFN_AVG, AFN_MIN, AFN_MAX } aggregate_fn_t;
+typedef enum { AFN_NONE, AFN_AVG, AFN_MIN, AFN_MAX } aggregate_fn_t;
 
 // Define operator types
-typedef enum { OP_EQ, OP_NE, OP_GE, OP_GT, OP_LE, OP_LT } operator_t;
+typedef enum { OP_NONE, OP_EQ, OP_NE, OP_GE, OP_GT, OP_LE, OP_LT } operator_t;
+
+// Define boolean operators
+typedef enum { BOOL_NONE, BOOL_AND } boolean_op_t;
 
 /*
  * Select mask, to define the kind of type of query
@@ -56,31 +91,48 @@ typedef enum select_mask {
 
 // Define structure for CREATE statement
 typedef struct {
+    int single;
     char db_name[IDENTIFIER_LENGTH];
     char ts_name[IDENTIFIER_LENGTH];
-    uint8_t mask;
-} statement_create_t;
+    int retention;
+    int duplication;
+} ast_node_create_t;
+
+// Define structure for DELETE statement
+typedef struct {
+    int single;
+    char db_name[IDENTIFIER_LENGTH];
+    char ts_name[IDENTIFIER_LENGTH];
+} ast_node_delete_t;
 
 // Define a pair (timestamp, value) for INSERT statements
 typedef struct {
     int64_t timestamp;
     double_t value;
-} create_record_t;
+} ast_node_record_t;
 
 // Define structure for INSERT statement
 typedef struct {
-    size_t record_len;
     char db_name[IDENTIFIER_LENGTH];
     char ts_name[IDENTIFIER_LENGTH];
-    create_record_t records[RECORDS_LENGTH];
-} statement_insert_t;
+    struct {
+        size_t length;
+        size_t capacity;
+        ast_node_record_t *items;
+    } record_array;
+} ast_node_insert_t;
 
 // Define structure for WHERE clause in SELECT statement
-typedef struct {
+typedef struct ast_node_where {
     char key[IDENTIFIER_LENGTH];
     operator_t operator;
     double_t value;
-} statement_where_t;
+
+    struct ast_node_where *left;
+    struct ast_node_where *right;
+    boolean_op_t boolean_op;
+
+} ast_node_where_t;
 
 // Define structure for SELECT statement
 typedef struct {
@@ -89,35 +141,34 @@ typedef struct {
     int64_t start_time;
     int64_t end_time;
     aggregate_fn_t af;
-    statement_where_t where;
+    ast_node_where_t *where;
     uint64_t interval;
     select_mask_t mask;
-} statement_select_t;
+} ast_node_select_t;
 
 // Define statement types
 typedef enum {
     STATEMENT_EMPTY,
     STATEMENT_CREATE,
+    STATEMENT_DELETE,
     STATEMENT_INSERT,
     STATEMENT_SELECT,
     STATEMENT_UNKNOWN
-} statement_type_t;
+} ast_node_type_t;
 
 // Define a generic statement
 typedef struct {
-    statement_type_t type;
+    ast_node_type_t type;
     union {
-        statement_create_t create;
-        statement_insert_t insert;
-        statement_select_t select;
+        ast_node_create_t create;
+        ast_node_delete_t delete;
+        ast_node_insert_t insert;
+        ast_node_select_t select;
     };
-} statement_t;
+} ast_node_t;
 
-// Parse a statement
-statement_t parse(const char *input);
+ast_node_t *ast_parse(const char *input);
+void ast_free(ast_node_t *node);
+void print_ast_node(const ast_node_t *node);
 
-// Debug helpers
-
-void print_statement(const statement_t *statement);
-
-#endif // PARSER_H
+#endif

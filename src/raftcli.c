@@ -1,5 +1,6 @@
 #include "client.h"
 #include "encoding.h"
+#include "parser.h"
 #include "timeutil.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -54,15 +55,18 @@ static void print_usage(const char *prog_name)
     exit(EXIT_FAILURE);
 }
 
-static void parse_args(int argc, char *argv[], int *port)
+static void parse_args(int argc, char *argv[], int *port, int *mode)
 {
     if (argc < 2)
         return;
     int opt;
-    while ((opt = getopt(argc, argv, "p:")) != -1) {
+    while ((opt = getopt(argc, argv, "p:d")) != -1) {
         switch (opt) {
         case 'p':
             *port = atoi(optarg);
+            break;
+        case 'd':
+            *mode = 0;
             break;
         default:
             print_usage(argv[0]);
@@ -71,34 +75,43 @@ static void parse_args(int argc, char *argv[], int *port)
     }
 }
 
-int main(int argc, char **argv)
+static void runclidbg(client_t *c)
 {
-    int port        = DEFAULT_PORT;
-    int mode        = AF_INET;
-    char *host      = LOCALHOST;
-    size_t line_len = 0LL;
     char *line      = NULL;
-    response_t rs;
-    double delta = 0.0;
+    size_t line_len = 0LL;
+    ast_node_t *stm = NULL;
 
-    parse_args(argc, argv, &port);
-
-    struct connect_options conn_opts = {
-        .s_family = mode, .s_addr = host, .s_port = port, .timeout = 0};
-    client_t c = {.opts = &conn_opts};
-
-    if (client_connect(&c) < 0)
-        exit(EXIT_FAILURE);
-    int err                    = 0;
-    struct timespec start_time = {0}, end_time = {0};
     while (1) {
-        prompt(&c);
+        prompt(c);
         getline(&line, &line_len, stdin);
-        (void)clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start_time);
-        err = client_send_command(&c, line);
+
+        stm = ast_parse(line);
+        printf("\n");
+        print_ast_node(stm);
+        printf("\n");
+        ast_free(stm);
+    }
+    free(line);
+}
+
+static void runcli(client_t *c)
+{
+    int err                    = 0;
+    char *line                 = NULL;
+    size_t line_len            = 0LL;
+    struct timespec start_time = {0};
+    struct timespec end_time   = {0};
+    response_t rs              = {0};
+    double delta               = 0.0;
+
+    while (1) {
+        prompt(c);
+        getline(&line, &line_len, stdin);
+        (void)clocktime(&start_time);
+        err = client_send_command(c, line);
         if (err <= 0) {
             if (err == CLIENT_SUCCESS) {
-                client_disconnect(&c);
+                client_disconnect(c);
                 break;
             } else if (err == CLIENT_UNKNOWN_CMD) {
                 printf("Unknown command or malformed one\n");
@@ -110,8 +123,8 @@ int main(int argc, char **argv)
             }
             continue;
         }
-        client_recv_response(&c, &rs);
-        (void)clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end_time);
+        client_recv_response(c, &rs);
+        (void)clocktime(&end_time);
         print_response(&rs);
         if (rs.type == ARRAY_RSP) {
             delta = timespec_seconds(&end_time) - timespec_seconds(&end_time);
@@ -119,7 +132,33 @@ int main(int argc, char **argv)
                    delta);
         }
     }
-    client_disconnect(&c);
     free(line);
+}
+
+int main(int argc, char **argv)
+{
+    int connport   = DEFAULT_PORT;
+    int connmode   = AF_INET;
+    char *connhost = LOCALHOST;
+    int mode       = 1;
+
+    parse_args(argc, argv, &connport, &mode);
+
+    struct connect_options conn_opts = {.s_family = connmode,
+                                        .s_addr   = connhost,
+                                        .s_port   = connport,
+                                        .timeout  = 0};
+    client_t c                       = {.opts = &conn_opts};
+
+    if (mode && client_connect(&c) < 0)
+        exit(EXIT_FAILURE);
+
+    if (mode)
+        runcli(&c);
+    else
+        runclidbg(&c);
+
+    client_disconnect(&c);
+
     return 0;
 }
