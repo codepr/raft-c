@@ -528,7 +528,7 @@ int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r)
 }
 
 static void ts_chunk_range(const timeseries_chunk_t *tc, uint64_t t0,
-                           uint64_t t1, record_array_t *p)
+                           uint64_t t1, record_array_t *out)
 {
     uint64_t sec0 = t0 / (uint64_t)1e9;
     uint64_t sec1 = t1 / (uint64_t)1e9;
@@ -560,7 +560,7 @@ static void ts_chunk_range(const timeseries_chunk_t *tc, uint64_t t0,
         for (size_t j = idx_low; j < end + 1; ++j) {
             record_t r = da_get(tc->points[i], j);
             if (r.is_set == 1)
-                da_append(p, r);
+                da_append(out, r);
         }
         idx_low = 0;
     }

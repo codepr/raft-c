@@ -41,21 +41,20 @@ string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
  **
  ** SELECT_CMD  ::= "SELECT" IDENTIFIER "FROM" IDENTIFIER
  **                 "RANGE" TIMESTAMP "TO" TIMESTAMP
- **                 "WHERE" "value" COMPARATOR LITERAL
- **                 "AGGREGATE" AGG_FUNC "BY" LITERAL
+ **                 "WHERE" "value" COMPARATOR IDENTIFIER
+ **                 "AGGREGATE" AGG_FUNC "BY" IDENTIFIER
  **
  ** DELETE_CMD  ::= "DELETE" IDENTIFIER
  **               | "DELETE" IDENTIFIER "FROM" IDENTIFIER
  **
- ** RETENTION   ::= LITERAL
- ** DUPLICATION ::= LITERAL
+ ** RETENTION   ::= NUMBER
+ ** DUPLICATION ::= NUMBER
  ** COMPARATOR  ::= ">" | "<" | "=" | "<=" | ">=" | "!="
  ** AGG_FUNC    ::= "AVG" | "MIN" | "MAX"
  ** VALUE_LIST  ::= VALUE ("," VALUE)*
  ** VALUE       ::= NUMBER
  ** TIMESTAMP   ::= NUMBER | "*"
  ** IDENTIFIER  ::= [A-Za-z_][A-Za-z0-9_]*
- ** LITERAL     ::= STRING | NUMBER
  **
  ** E.g.
  **

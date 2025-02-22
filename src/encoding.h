@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#define QUERYSIZE 512
+
 /**
  ** Server text-based protocol
  **/
@@ -15,7 +17,7 @@
  */
 typedef struct {
     size_t length;
-    char query[512];
+    char query[QUERYSIZE];
 } request_t;
 
 /*
@@ -25,7 +27,7 @@ typedef struct {
 typedef struct {
     size_t length;
     uint8_t rc;
-    char message[512];
+    char message[QUERYSIZE];
 } string_response_t;
 
 /*

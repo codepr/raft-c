@@ -52,24 +52,6 @@ static string_view_t lexer_next(lexer_t *l)
     return lexiom;
 }
 
-// Function to get the next token by a separator from the lexer
-static string_view_t lexer_next_by_sep(lexer_t *l, char sep)
-{
-    string_view_t lexiom = string_view_chop_by_delim(&l->view, sep);
-    l->length            = l->view.length;
-    return lexiom;
-}
-
-// Function to peek at the next token from the lexer without consuming it
-static string_view_t lexer_peek(lexer_t *l)
-{
-    size_t length        = l->length;
-    string_view_t lexiom = lexer_next(l);
-    l->view.p -= length - l->length;
-    l->view.length = length;
-    return lexiom;
-}
-
 // Define token types
 typedef enum {
     TOKEN_CREATE,
@@ -225,8 +207,6 @@ typedef struct {
     token_t *tokens;
     size_t pos;
 } parser_t;
-
-static token_t next_token(parser_t *p) { return p->tokens[p->pos++]; }
 
 static token_t *parser_peek(const parser_t *p) { return &p->tokens[p->pos]; }
 
@@ -680,7 +660,7 @@ static void print_insert(const ast_node_insert_t *insert)
     printf("  into=%s\n", insert->db_name);
     printf("  values=\n");
     for (size_t i = 0; i < insert->record_array.length; ++i) {
-        printf("    - (%" PRId64 ", %.2f) ",
+        printf("    - (%" PRId64 ", %.2f)\n",
                insert->record_array.items[i].timestamp,
                insert->record_array.items[i].value);
     }

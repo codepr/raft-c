@@ -5,6 +5,8 @@
 #include "iomux.h"
 #include "logger.h"
 #include "network.h"
+#include "parser.h"
+#include "timeseries.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -16,8 +18,167 @@
 #include <time.h>
 #include <unistd.h>
 
-static ssize_t handle_client(int fd, iomux_t *iomux, uint8_t buf[BUFSIZ])
+#define add_string_response(resp, str, rc)                                     \
+    do {                                                                       \
+        (resp).type   = STRING_RSP;                                            \
+        size_t length = strlen((str));                                         \
+        memset((resp).string_response.message, 0x00,                           \
+               sizeof((resp).string_response.message));                        \
+        strncpy((resp).string_response.message, (str), length);                \
+        (resp).string_response.length = length;                                \
+    } while (0)
+
+// testing dummy
+static timeseries_db_t *db = NULL;
+
+static response_t execute_statement(const ast_node_t *stm)
 {
+    response_t rs    = {0};
+    record_t r       = {0};
+    timeseries_t *ts = NULL;
+    int err          = 0;
+    struct timespec tv;
+
+    switch (stm->type) {
+    case STATEMENT_CREATE:
+        if (!stm->create.single) {
+            db = tsdb_init(stm->create.db_name);
+            if (!db)
+                goto err;
+        } else {
+            if (!db)
+                db = tsdb_init(stm->create.db_name);
+
+            if (!db)
+                goto err;
+
+            ts = ts_create(db, stm->create.ts_name, 0, DP_IGNORE);
+        }
+        if (!ts)
+            goto err;
+        else
+            add_string_response(rs, "Ok", 0);
+        break;
+    case STATEMENT_INSERT:
+        if (!db)
+            db = tsdb_init(stm->insert.db_name);
+
+        if (!db)
+            goto err;
+
+        ts = ts_get(db, stm->insert.ts_name);
+        if (!ts)
+            goto err_not_found;
+
+        uint64_t timestamp = 0;
+        for (size_t i = 0; i < stm->insert.record_array.length; ++i) {
+            if (stm->insert.record_array.items[i].timestamp == -1) {
+                clock_gettime(CLOCK_REALTIME, &tv);
+                timestamp = tv.tv_sec * 1e9 + tv.tv_nsec;
+            } else {
+                timestamp = stm->insert.record_array.items[i].timestamp;
+            }
+
+            err = ts_insert(ts, timestamp,
+                            stm->insert.record_array.items[i].value);
+            if (err < 0)
+                goto err;
+            else
+                add_string_response(rs, "Ok", 0);
+        }
+
+        break;
+    case STATEMENT_SELECT:
+        if (!db)
+            db = tsdb_init(stm->select.db_name);
+
+        if (!db)
+            goto err;
+
+        ts = ts_get(db, stm->select.ts_name);
+        if (!ts)
+            goto err_not_found;
+
+        int err = 0;
+
+        record_array_t coll;
+
+        if (stm->select.mask & SM_SINGLE) {
+            err = ts_find(ts, stm->select.start_time, &r);
+            if (err < 0) {
+                log_error("Couldn't find the record %" PRIu64,
+                          stm->select.start_time);
+                goto err_not_found;
+            } else {
+                log_info("Record found: %" PRIu64 " %.2lf", r.timestamp,
+                         r.value);
+                rs.type                  = ARRAY_RSP;
+                rs.array_response.length = 1;
+                rs.array_response.records =
+                    calloc(1, sizeof(*rs.array_response.records));
+                rs.array_response.records[0].timestamp = r.timestamp;
+                rs.array_response.records[0].value     = r.value;
+            }
+        } else if (stm->select.mask & SM_RANGE) {
+            err = ts_range(ts, stm->select.start_time, stm->select.end_time,
+                           &coll);
+            if (err < 0) {
+                log_error("Couldn't find the record %" PRIu64,
+                          stm->select.start_time);
+            } else {
+                for (size_t i = 0; i < coll.length; i++) {
+                    record_t r = coll.items[i];
+                    log_info(" %" PRIu64
+                             " {.sec: %li, .nsec: %li .value: %.02f }",
+                             r.timestamp, r.tv.tv_sec, r.tv.tv_nsec, r.value);
+                }
+            }
+            rs.array_response.length = coll.length;
+            for (size_t i = 0; i < coll.length; ++i) {
+                rs.array_response.records[i].timestamp = r.timestamp;
+                rs.array_response.records[i].value     = r.value;
+            }
+        }
+        break;
+    default:
+        log_error("Unknown command");
+        break;
+    }
+
+    if (ts)
+        ts_close(ts);
+
+    return rs;
+
+err:
+    add_string_response(rs, "Err", err);
+    return rs;
+
+err_not_found:
+
+    add_string_response(rs, "Not found", err);
+    return rs;
+}
+
+static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
+{
+    request_t rq          = {0};
+    response_t rs         = {0};
+    ast_node_t *statement = NULL;
+
+    ssize_t n             = decode_request(buf, &rq);
+    if (n < 0) {
+        log_error("Can't decode a request from data");
+        rs.type               = STRING_RSP;
+        rs.string_response.rc = 1;
+        strncpy(rs.string_response.message, "Err", 4);
+        rs.string_response.length = 4;
+    } else {
+        // Parse into Statement
+        statement = ast_parse(rq.query);
+        // Execute it
+        rs        = execute_statement(statement);
+    }
     return 1;
 }
 
@@ -170,9 +331,6 @@ static void parse_args(int argc, char *argv[], args_t *args)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2)
-        exit(EXIT_FAILURE);
-
     config_set_default();
 
     log_info("Application node start");
@@ -184,30 +342,31 @@ int main(int argc, char **argv)
     cluster_node_t nodes[3]                          = {0};
     cluster_node_t replicas[3]                       = {0};
     int node_id                                      = -1;
+    int cluster_fd                                   = -1;
+    int server_fd                                    = -1;
+    cluster_node_t this                              = {0};
+    cluster_node_from_string(config_get("host"), &this);
 
     parse_args(argc, argv, &config);
 
     config_print();
 
-    int nodes_num    = config_get_list("shard_leaders", node_strings);
-    int replicas_num = config_get_list("raft_replicas", raft_strings);
+    if (config_get_enum("type") != NT_STANDALONE) {
 
-    for (int i = 0; i < nodes_num; ++i)
-        cluster_node_from_string(node_strings[i], &nodes[i]);
+        int nodes_num    = config_get_list("shard_leaders", node_strings);
+        int replicas_num = config_get_list("raft_replicas", raft_strings);
 
-    for (int i = 0; i < replicas_num; ++i)
-        cluster_node_from_string(raft_strings[i], &replicas[i]);
+        for (int i = 0; i < nodes_num; ++i)
+            cluster_node_from_string(node_strings[i], &nodes[i]);
 
-    node_id = config.node_id >= 0 ? config.node_id : config_get_int("id");
+        for (int i = 0; i < replicas_num; ++i)
+            cluster_node_from_string(raft_strings[i], &replicas[i]);
 
-    cluster_start(nodes, nodes_num, replicas, replicas_num, node_id,
-                  "raft_state.bin", config_get_enum("type"));
+        node_id = config.node_id >= 0 ? config.node_id : config_get_int("id");
 
-    int cluster_fd      = -1;
-    int server_fd       = -1;
-
-    cluster_node_t this = {0};
-    cluster_node_from_string(config_get("host"), &this);
+        cluster_start(nodes, nodes_num, replicas, replicas_num, node_id,
+                      "raft_state.bin", config_get_enum("type"));
+    }
 
     server_fd = tcp_listen(this.ip, this.port, 1);
     if (server_fd < 0)

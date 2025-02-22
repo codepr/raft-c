@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #define LOCALHOST    "127.0.0.1"
-#define DEFAULT_PORT 27778
+#define DEFAULT_PORT 18777
 
 static const char *cmd_usage(const char *cmd)
 {
@@ -57,8 +57,6 @@ static void print_usage(const char *prog_name)
 
 static void parse_args(int argc, char *argv[], int *port, int *mode)
 {
-    if (argc < 2)
-        return;
     int opt;
     while ((opt = getopt(argc, argv, "p:d")) != -1) {
         switch (opt) {

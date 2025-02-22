@@ -10,7 +10,7 @@
 
 // Default config table
 #define ID                "0"
-#define TYPE              "shard"
+#define TYPE              "standalone"
 #define HOST              "127.0.0.1:18777"
 #define SHARD_LEADERS     "127.0.0.1:8777 127.0.0.1:8877 127.0.0.1:8977"
 #define RAFT_REPLICAS     "127.0.0.1:9777 127.0.0.1:9778"
@@ -101,6 +101,8 @@ int config_get_enum(const char *key)
     if (!value)
         return -1;
 
+    if (strncasecmp(value, "standalone", MAX_VALUE_SIZE) == 0)
+        return NT_STANDALONE;
     if (strncasecmp(value, "shard", MAX_VALUE_SIZE) == 0)
         return NT_SHARD;
     if (strncasecmp(value, "replica", MAX_VALUE_SIZE) == 0)
