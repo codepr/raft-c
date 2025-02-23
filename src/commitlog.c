@@ -65,7 +65,7 @@ int c_log_load(commitlog_t *cl, const char *path, uint64_t base)
 
 int c_log_append_data(commitlog_t *cl, const uint8_t *data, size_t len)
 {
-    int bytes = pwrite(fileno(cl->fp), data, cl->size, len);
+    int bytes = pwrite(fileno(cl->fp), data, len, cl->size);
     if (bytes < 0) {
         perror("write_at");
         return -1;
@@ -90,7 +90,7 @@ int c_log_append_batch(commitlog_t *cl, const uint8_t *batch, size_t len)
         cl->base_ns              = first_timestamp % (uint64_t)1e9;
     }
 
-    int n = pwrite(fileno(cl->fp), batch + start_offset, cl->size, len);
+    int n = pwrite(fileno(cl->fp), batch + start_offset, len, cl->size);
     if (n < 0) {
         perror("write_at");
         return -1;
@@ -104,7 +104,7 @@ int c_log_append_batch(commitlog_t *cl, const uint8_t *batch, size_t len)
 int c_log_read_at(const commitlog_t *cl, uint8_t **buf, size_t offset,
                   size_t len)
 {
-    return pread(fileno(cl->fp), *buf, offset, len);
+    return pread(fileno(cl->fp), *buf, len, offset);
 }
 
 void c_log_print(const commitlog_t *cl)

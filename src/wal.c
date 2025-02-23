@@ -10,6 +10,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#define RECORDSIZE sizeof(uint64_t) + sizeof(double_t)
+
 static const char t[2] = {'t', 'h'};
 
 int wal_init(wal_t *w, const char *path, uint64_t base_timestamp, int main)
@@ -63,16 +65,15 @@ errdefer:
 
 int wal_append(wal_t *wal, uint64_t ts, double_t value)
 {
-    size_t len = sizeof(uint64_t) + sizeof(double_t);
-    uint8_t buf[len];
+    uint8_t buf[RECORDSIZE];
 
     write_i64(buf, ts);
     write_f64(buf + sizeof(uint64_t), value);
 
     // TODO Fix to handle multiple points in the same timestamp
-    if (pwrite(fileno(wal->fp), buf, wal->size, len) < 0)
+    if (pwrite(fileno(wal->fp), buf, RECORDSIZE, wal->size) < 0)
         return -1;
-    wal->size += len;
+    wal->size += RECORDSIZE;
     return 0;
 }
 

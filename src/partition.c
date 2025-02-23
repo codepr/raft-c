@@ -62,11 +62,11 @@ int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc)
 {
 
     // Temporary array
-    darray(const record_t *) records;
+    darray(const record_t *) records = {0};
 
-    size_t total_records = 0;
-    size_t batch_size    = 0;
-    uint8_t *buf         = malloc(TS_FLUSH_SIZE * 2);
+    size_t total_records             = 0;
+    size_t batch_size                = 0;
+    uint8_t *buf                     = malloc(TS_FLUSH_SIZE * 2);
     if (!buf)
         return -1;
 

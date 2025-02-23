@@ -52,7 +52,7 @@ int index_append(index_t *pi, uint64_t ts, uint64_t offset)
     write_i64(buf, relative_ts);
     write_i64(buf + sizeof(uint64_t), offset);
 
-    if (pwrite(fileno(pi->fp), buf, pi->size, ENTRY_SIZE) < 0) {
+    if (pwrite(fileno(pi->fp), buf, ENTRY_SIZE, pi->size) < 0) {
         perror("pwrite");
         return -1;
     }
