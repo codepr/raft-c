@@ -19,3 +19,4 @@ raft-cli
 .clang-tidy
 raft_state.*
 logs
+logdata

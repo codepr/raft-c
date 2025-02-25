@@ -11,6 +11,7 @@ typedef struct partition {
     index_t index;
     uint64_t start_ts;
     uint64_t end_ts;
+    int initialized;
 } partition_t;
 
 int partition_init(partition_t *p, const char *path, uint64_t base);

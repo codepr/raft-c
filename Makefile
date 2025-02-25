@@ -48,7 +48,20 @@ CLI_SRC = src/client.c      \
 CLI_OBJ = $(CLI_SRC:.c=.o)
 CLI_EXEC = raft-cli
 
-all: $(RAFT_C_EXEC) $(CLI_EXEC)
+TEST_SRC = tests/tests.c           \
+           tests/timeseries_test.c \
+           src/timeseries.c        \
+           src/timeutil.c          \
+           src/wal.c               \
+           src/storage.c           \
+           src/partition.c         \
+           src/binary.c            \
+           src/commitlog.c         \
+           src/index.c
+TEST_OBJ = $(TEST_SRC:.c=.o)
+TEST_EXEC = raft-c-tests
+
+all: $(RAFT_C_EXEC) $(CLI_EXEC) $(TEST_EXEC)
 
 $(RAFT_C_EXEC): $(RAFT_C_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -60,6 +73,9 @@ libraft.so: $(LIB_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(CLI_EXEC): $(CLI_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_EXEC): $(TEST_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

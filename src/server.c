@@ -74,7 +74,7 @@ static response_t execute_statement(const ast_node_t *stm)
         for (size_t i = 0; i < stm->insert.record_array.length; ++i) {
             if (stm->insert.record_array.items[i].timestamp == -1) {
                 clock_gettime(CLOCK_REALTIME, &tv);
-                timestamp = tv.tv_sec * 1e9 + tv.tv_nsec;
+                timestamp = tv.tv_sec * (uint64_t)1e9 + tv.tv_nsec;
             } else {
                 timestamp = stm->insert.record_array.items[i].timestamp;
             }

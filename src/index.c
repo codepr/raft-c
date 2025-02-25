@@ -45,7 +45,7 @@ int index_load(index_t *pi, const char *path, uint64_t base)
 
 int index_append(index_t *pi, uint64_t ts, uint64_t offset)
 {
-    uint64_t relative_ts = ts - (pi->base_timestamp * 1e9);
+    uint64_t relative_ts = ts - (pi->base_timestamp * (uint64_t)1e9);
 
     // Serialize the position into integer 64bits
     uint8_t buf[ENTRY_SIZE];

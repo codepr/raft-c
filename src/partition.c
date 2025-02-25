@@ -21,8 +21,9 @@ int partition_init(partition_t *p, const char *path, uint64_t base)
     if (err < 0)
         return -1;
 
-    p->start_ts = 0;
-    p->end_ts   = 0;
+    p->start_ts    = 0;
+    p->end_ts      = 0;
+    p->initialized = 1;
 
     return 0;
 }
@@ -66,7 +67,7 @@ int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc)
 
     size_t total_records             = 0;
     size_t batch_size                = 0;
-    uint8_t *buf                     = malloc(TS_FLUSH_SIZE * 2);
+    uint8_t *buf                     = malloc(TS_FLUSH_SIZE * 4);
     if (!buf)
         return -1;
 
@@ -77,13 +78,12 @@ int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc)
         if (tc->points[i].length == 0)
             continue;
 
-        for (size_t j = 0; j < tc->points[i].length; ++j) {
+        for (size_t j = 0; j < tc->points[i].length; ++j, ++total_records) {
             da_append(&records, &tc->points[i].items[j]);
-            total_records++;
 
             if (++batch_size == BATCH_SIZE) {
                 // Poor man slice
-                size_t len = ts_record_batch_write(
+                ssize_t len = ts_record_batch_write(
                     (records.items + (total_records - BATCH_SIZE)), bufptr,
                     BATCH_SIZE);
                 err = commit_records_to_log(p, bufptr, len);
@@ -96,7 +96,7 @@ int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc)
     }
 
     // Finish up any remaining record
-    size_t remaining_records = total_records % BATCH_SIZE;
+    ssize_t remaining_records = total_records % BATCH_SIZE;
     if (remaining_records != 0) {
         size_t len = ts_record_batch_write(
             (records.items + (total_records - remaining_records)), bufptr,
@@ -163,6 +163,9 @@ int partition_find(const partition_t *p, uint8_t *dst, uint64_t timestamp)
         ptr += record_len;
         n -= record_len;
     }
+
+    if (n == 0 && ts != timestamp)
+        return -1;
 
     record_len = read_i64(ptr);
     memcpy(dst, ptr, record_len);

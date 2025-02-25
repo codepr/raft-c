@@ -144,6 +144,9 @@ static void ts_chunk_destroy(timeseries_chunk_t *tc)
             tc->points[i].length = 0;
         }
     }
+
+    wal_delete(&tc->wal);
+
     tc->base_offset = 0;
     tc->start_ts    = 0;
     tc->end_ts      = 0;
@@ -153,14 +156,17 @@ static void ts_chunk_destroy(timeseries_chunk_t *tc)
 static int ts_chunk_record_fit(const timeseries_chunk_t *tc, uint64_t sec)
 {
     // Relative offset inside the 2 arrays
-    size_t index = sec - tc->base_offset;
+    ssize_t index = sec - tc->base_offset;
+
+    if (index < 0)
+        return -1;
 
     // Index outside of the head chunk range
     // 1. Flush the tail chunk to persistence
     // 2. Create a new head chunk set on the next 15 min
     // 3. Make the current head chunk the new tail chunk
     if (index > TS_CHUNK_SIZE - 1)
-        return -1;
+        return 1;
 
     return 0;
 }
@@ -204,12 +210,12 @@ static int ts_chunk_set_record(timeseries_chunk_t *tc, uint64_t sec,
                                uint64_t nsec, double_t value)
 {
     // Relative offset inside the 2 arrays
-    size_t index   = sec - tc->base_offset;
+    size_t index   = tc->base_offset == 0 ? 0 : sec - tc->base_offset;
 
     // Append to the last record in this timestamp bucket
     record_t point = {
         .value     = value,
-        .timestamp = sec * 1e9 + nsec,
+        .timestamp = sec * (uint64_t)1e9 + nsec,
         .tv        = (struct timespec){.tv_sec = sec, .tv_nsec = nsec},
         .is_set    = 1,
     };
@@ -220,19 +226,22 @@ static int ts_chunk_set_record(timeseries_chunk_t *tc, uint64_t sec,
         da_bsearch(&tc->points[index], &point, record_cmp, &i);
         if (i < 0)
             return -1;
-        // Simple shift of existing elements, maybe worth adding a support
-        // vector for out of order (in chunk range) records and merge them
-        // when flushing, must profile
-        // NB WAL doesn't need any change as it will act as an event
-        // log, replayable to obtain the up-to-date state
-        da_insert(&tc->points[index], (size_t)i, point);
+        // Simple shift of existing elements, maybe worth adding a
+        // support vector for out of order (in chunk range) records and
+        // merge them when flushing, must profile NB WAL doesn't need any
+        // change as it will act as an event log, replayable to obtain
+        // the up-to-date state
+        da_insert_shift(&tc->points[index], (size_t)i, point);
     } else {
         da_append(&tc->points[index], point);
         tc->max_index = index > tc->max_index ? index : tc->max_index;
     }
 
-    tc->start_ts = tc->start_ts == 0 ? point.timestamp : tc->start_ts;
-    tc->end_ts   = point.timestamp;
+    tc->base_offset = point.timestamp < tc->base_offset || tc->base_offset == 0
+                          ? point.timestamp
+                          : tc->base_offset;
+    tc->start_ts    = tc->start_ts == 0 ? point.timestamp : tc->start_ts;
+    tc->end_ts = tc->end_ts < point.timestamp ? point.timestamp : tc->end_ts;
 
     return 0;
 }
@@ -337,8 +346,23 @@ static void ts_deinit(timeseries_t *ts)
 {
     ts_chunk_destroy(&ts->head);
     ts_chunk_destroy(&ts->prev);
-    wal_delete(&ts->head.wal);
-    wal_delete(&ts->prev.wal);
+}
+
+static int ts_flush_prev(timeseries_t *ts, const char *path)
+{
+    // Flush the prev chunk to persistence
+    partition_t *pt = &ts->partitions[ts->partition_nr];
+
+    if (!pt->initialized && partition_init(pt, path, ts->head.base_offset) < 0)
+        return -1;
+
+    if (partition_flush_chunk(pt, &ts->prev) < 0)
+        return -1;
+
+    // Clean up the prev chunk and delete it's WAL
+    ts_chunk_destroy(&ts->prev);
+
+    return 0;
 }
 
 /*
@@ -360,6 +384,7 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
     uint64_t sec  = timestamp / (uint64_t)1e9;
     uint64_t nsec = timestamp % (uint64_t)1e9;
 
+    // TODO move to struct field
     char pathbuf[PATHBUF_SIZE];
     snprintf(pathbuf, sizeof(pathbuf), "%s/%s/%s", BASE_PATH, ts->db_datapath,
              ts->name);
@@ -371,37 +396,57 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
                                                        : ts->head.base_offset;
         size_t partition_nr = ts->partition_nr == 0 ? 0 : ts->partition_nr - 1;
 
+        partition_t *pt     = &ts->partitions[ts->partition_nr];
         if (ts->partitions[partition_nr].clog.base_timestamp < base) {
-            if (partition_init(&ts->partitions[ts->partition_nr], pathbuf,
-                               base) < 0) {
+            if (!pt->initialized && partition_init(pt, pathbuf, base) < 0) {
                 return -1;
             }
-            partition_nr = ts->partition_nr;
-            ts->partition_nr++;
+            partition_nr = ts->partition_nr++;
+        }
+
+        if (!pt->initialized && partition_init(pt, pathbuf, base) < 0) {
+            return -1;
         }
 
         // Dump chunks into disk and create new ones
-        if (partition_flush_chunk(&ts->partitions[partition_nr], &ts->prev) < 0)
+        if (partition_flush_chunk(pt, &ts->prev) < 0)
             return -1;
-        if (partition_flush_chunk(&ts->partitions[partition_nr], &ts->head) < 0)
+
+        if (partition_flush_chunk(pt, &ts->head) < 0)
             return -1;
 
         // Reset clean both head and prev in-memory chunks
         ts_deinit(ts);
     }
-    // Let it crash for now if the timestamp is out of bounds in the ooo
+
+    // Let it crash for now if the timestamp is out of bounds in the ooo? What
+    // should we do if we receive a timestamp that is smaller than both the head
+    // base and the prev base?
     if (sec < ts->head.base_offset) {
         // If the chunk is empty, it also means the base offset is 0, we set
         // it here with the first record inserted
-        if (ts->prev.base_offset == 0)
+        if (ts->prev.base_offset == 0) {
             ts_chunk_init(&ts->prev, pathbuf, sec, 0);
-
-        // Persist to disk for disaster recovery
-        wal_append(&ts->prev.wal, timestamp, value);
+        }
 
         // If we successfully insert the record, we can return
-        if (ts_chunk_record_fit(&ts->prev, sec) == 0)
+        if (ts_chunk_record_fit(&ts->prev, sec) == 0) {
+            // Persist to disk for disaster recovery
+            wal_append(&ts->prev.wal, timestamp, value);
             return ts_chunk_set_record(&ts->prev, sec, nsec, value);
+        }
+
+        // Check if the record is older than the prev
+        if (ts_chunk_record_fit(&ts->prev, sec) < 0) {
+            if (ts_flush_prev(ts, pathbuf) < 0)
+                return -1;
+            // Promote a new prev chunk for the OOO insert
+            ts_chunk_init(&ts->prev, pathbuf, sec, 0);
+
+            // Persist to disk for disaster recovery
+            wal_append(&ts->prev.wal, timestamp, value);
+            return ts_chunk_set_record(&ts->prev, sec, nsec, value);
+        }
     }
 
     if (ts->head.base_offset == 0)
@@ -411,19 +456,14 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
     wal_append(&ts->head.wal, timestamp, value);
     // Check if the timestamp is in range of the current chunk, otherwise
     // create a new in-memory segment
-    if (ts_chunk_record_fit(&ts->head, sec) < 0) {
-        // Flush the prev chunk to persistence
-        if (partition_flush_chunk(&ts->partitions[ts->partition_nr],
-                                  &ts->prev) < 0)
+    if (ts_chunk_record_fit(&ts->head, sec) > 0) {
+        if (ts_flush_prev(ts, pathbuf) < 0)
             return -1;
-        // Clean up the prev chunk and delete it's WAL
-        ts_chunk_destroy(&ts->prev);
-        wal_delete(&ts->prev.wal);
         // Set the current head as new prev
         ts->prev = ts->head;
         // Reset the current head as new head
         ts_chunk_destroy(&ts->head);
-        wal_delete(&ts->head.wal);
+        ts_chunk_init(&ts->head, pathbuf, sec, 1);
     }
     // Insert it into the head chunk
     return ts_chunk_set_record(&ts->head, sec, nsec, value);
@@ -480,7 +520,7 @@ int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r)
     record_t target = {.timestamp = timestamp};
     int err         = 0;
 
-    if (ts->head.base_offset > 0) {
+    if (ts->head.base_offset > 0 && ts->head.base_offset <= sec) {
         // First check the current chunk
         err = ts_search_index(&ts->head, sec, &target, r);
         if (err <= 0)
