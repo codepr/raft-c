@@ -1,6 +1,6 @@
 #include "../src/darray.h"
 #include "../src/timeseries.h"
-#include "tests.h"
+#include "test_helpers.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -197,8 +197,8 @@ int timeseries_test(void)
 
     ts_close(ts);
     tsdb_close(db);
-    if (rmdir(TESTDIR) < 0)
-        perror("rmdir");
+
+    rm_recursive(TESTDIR);
 
     printf("\nTest Summary: %d Passed, %d Failed\n", success, cases - success);
 

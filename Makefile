@@ -49,6 +49,7 @@ CLI_OBJ = $(CLI_SRC:.c=.o)
 CLI_EXEC = raft-cli
 
 TEST_SRC = tests/tests.c           \
+           tests/test_helpers.c    \
            tests/timeseries_test.c \
            src/timeseries.c        \
            src/timeutil.c          \
