@@ -62,6 +62,7 @@ static int find_range_invalid_test(timeseries_t *ts)
 
     ASSERT_EQ(result, TS_E_INVALID_RANGE);
 
+    da_free(&out);
     printf("PASS\n");
 
     return 0;
@@ -86,6 +87,7 @@ static int find_range_records_test(timeseries_t *ts)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
+    int rc             = 0;
     int start          = 0;
     int end            = 0;
     int cases          = 100;
@@ -98,7 +100,8 @@ static int find_range_records_test(timeseries_t *ts)
         if (ts_range(ts, timestamps[start], timestamps[end], &out) < 0) {
             fprintf(stderr, "FAIL: ts_range failed for range [%llu - %llu]\n",
                     timestamps[start], timestamps[end]);
-            return -1;
+            rc = -1;
+            goto exit;
         }
 
         assert(out.length == (end - start) + 1);
@@ -112,11 +115,12 @@ static int find_range_records_test(timeseries_t *ts)
         da_reset(&out);
     }
 
+exit:
     da_free(&out);
 
     printf("PASS\n");
 
-    return 0;
+    return rc;
 }
 
 static int insert_out_of_order_test(timeseries_t *ts)
@@ -124,6 +128,7 @@ static int insert_out_of_order_test(timeseries_t *ts)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
+    int rc         = 0;
     int cases      = 50;
     int index      = 0;
     int seen[100]  = {0};
@@ -145,21 +150,25 @@ static int insert_out_of_order_test(timeseries_t *ts)
         if (ts_insert(ts, newts, value) < 0) {
             fprintf(stderr, "FAIL: ts_insert failed for record {%llu, %.2f}\n",
                     timestamps[index], value);
-            return -1;
+            rc = -1;
+            goto exit;
         }
         if (ts_find(ts, newts, &r) < 0) {
             fprintf(stderr, "FAIL: ts_find failed for timestamp %llu\n",
                     timestamps[index]);
-            return -1;
+            rc = -1;
+            goto exit;
         }
 
         ASSERT_EQ(newts, r.timestamp);
         ASSERT_FEQ(value, r.value);
     }
 
+exit:
+
     printf("PASS\n");
 
-    return 0;
+    return rc;
 }
 
 static int insert_out_of_bounds_test(timeseries_t *ts)
@@ -210,6 +219,7 @@ static int insert_out_of_bounds_test(timeseries_t *ts)
 
 int timeseries_test(void)
 {
+    printf("* %s\n\n", __FUNCTION__);
     int cases   = 7;
     int success = cases;
 
@@ -247,7 +257,8 @@ int timeseries_test(void)
 
     rm_recursive(TESTDIR);
 
-    printf("\nTest Summary: %d Passed, %d Failed\n", success, cases - success);
+    printf("\nTest suite summary: %d passed, %d failed\n", success,
+           cases - success);
 
     return success < cases ? -1 : 0;
 }

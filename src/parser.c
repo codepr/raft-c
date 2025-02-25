@@ -250,7 +250,7 @@ static int expect_operator(parser_t *p)
         break;
 
     case TOKEN_OPERATOR_LT:
-        op = OP_LE;
+        op = OP_LT;
         break;
 
     case TOKEN_OPERATOR_GT:

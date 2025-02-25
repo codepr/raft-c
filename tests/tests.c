@@ -3,9 +3,17 @@
 
 int main(void)
 {
+    int testsuites = 2;
+    int outcomes   = 0;
+
     printf("\n");
-    int outcome = timeseries_test();
+    outcomes += timeseries_test();
+    printf("\n");
+    outcomes += parser_test();
     printf("\n");
 
-    return outcome;
+    printf("\nTests summary: %d passed, %d failed\n", testsuites - outcomes,
+           outcomes == 0 ? 0 : testsuites - (outcomes * -1));
+
+    return outcomes == 0 ? 0 : -1;
 }
