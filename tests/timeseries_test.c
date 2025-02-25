@@ -10,6 +10,21 @@
 
 static uint64_t timestamps[POINTSNR] = {0};
 
+// Test ts_insert with NULL timeseries
+static int insert_null_test(timeseries_t *ts)
+{
+    (void)ts;
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    int result = ts_insert(NULL, 1000000000ULL, 42.0);
+    ASSERT_EQ(result, TS_E_NULL_POINTER);
+
+    printf("PASS\n");
+
+    return 0;
+}
+
 static int find_single_record_test(timeseries_t *ts)
 {
     printf("%s..", __FUNCTION__);
@@ -31,6 +46,35 @@ static int find_single_record_test(timeseries_t *ts)
         ASSERT_EQ(timestamps[index], r.timestamp);
         ASSERT_FEQ((double_t)index, r.value);
     }
+
+    printf("PASS\n");
+
+    return 0;
+}
+
+static int find_range_invalid_test(timeseries_t *ts)
+{
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    record_array_t out = {0};
+    int result         = ts_range(ts, timestamps[10], timestamps[8], &out);
+
+    ASSERT_EQ(result, TS_E_INVALID_RANGE);
+
+    printf("PASS\n");
+
+    return 0;
+}
+
+static int find_range_null_test(timeseries_t *ts)
+{
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    int result = ts_range(ts, timestamps[2], timestamps[8], NULL);
+
+    ASSERT_EQ(result, TS_E_NULL_POINTER);
 
     printf("PASS\n");
 
@@ -113,7 +157,7 @@ static int insert_out_of_order_test(timeseries_t *ts)
         ASSERT_FEQ(value, r.value);
     }
 
-    printf("pass\n");
+    printf("PASS\n");
 
     return 0;
 }
@@ -166,7 +210,7 @@ static int insert_out_of_bounds_test(timeseries_t *ts)
 
 int timeseries_test(void)
 {
-    int cases   = 4;
+    int cases   = 7;
     int success = cases;
 
     srand(time(NULL));
@@ -192,6 +236,9 @@ int timeseries_test(void)
 
     success += find_single_record_test(ts);
     success += find_range_records_test(ts);
+    success += find_range_null_test(ts);
+    success += find_range_invalid_test(ts);
+    success += insert_null_test(ts);
     success += insert_out_of_order_test(ts);
     success += insert_out_of_bounds_test(ts);
 

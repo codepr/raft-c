@@ -2,16 +2,29 @@
 #define TIMESERIES_H
 
 #include "partition.h"
+#include "storage.h"
 #include "wal.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
 
-#define TS_NAME_MAX_LENGTH 1 << 9
-#define TS_CHUNK_SIZE      900 // 15 min
-#define TS_MAX_PARTITIONS  16
-#define DATAPATH_SIZE      1 << 8
+#define TS_NAME_MAX_LENGTH        1 << 9
+#define TS_CHUNK_SIZE             900 // 15 min
+#define TS_MAX_PARTITIONS         16
+#define DATAPATH_SIZE             1 << 8
+
+// Errors
+#define TS_E_UNKNOWN              -1
+#define TS_E_OOM                  -2
+#define TS_E_NULL_POINTER         -3
+#define TS_E_INIT_PARTITION_FAIL  -4
+#define TS_E_FLUSH_PARTITION_FAIL -5
+#define TS_E_WAL_INIT_FAIL        -6
+#define TS_E_WAL_LOAD_FAIL        -7
+#define TS_E_WAL_APPEND_FAIL      -8
+#define TS_E_FLUSH_CHUNK_FAIL     -9
+#define TS_E_INVALID_RANGE        -10
 
 extern const size_t TS_FLUSH_SIZE;
 extern const size_t TS_BATCH_OFFSET;
@@ -81,6 +94,7 @@ typedef struct timeseries {
     int64_t retention;
     char name[TS_NAME_MAX_LENGTH];
     char db_datapath[DATAPATH_SIZE];
+    char pathbuf[PATHBUF_SIZE];
     timeseries_chunk_t head;
     timeseries_chunk_t prev;
     partition_t partitions[TS_MAX_PARTITIONS];
@@ -104,6 +118,12 @@ extern void ts_print(const timeseries_t *ts);
 typedef struct timeseries_db {
     char datapath[DATAPATH_SIZE];
 } timeseries_db_t;
+
+typedef struct ts_opts {
+    int64_t retention;
+    size_t ts_flushsize;
+    duplication_policy_t policy;
+} ts_opts_t;
 
 extern timeseries_db_t *tsdb_init(const char *datapath);
 

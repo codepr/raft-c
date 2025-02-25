@@ -2,7 +2,6 @@
 #include "binary.h"
 #include "darray.h"
 #include "logger.h"
-#include "storage.h"
 #include <dirent.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -65,14 +64,6 @@ timeseries_t *ts_create(const timeseries_db_t *tsdb, const char *name,
     snprintf(ts->name, TS_NAME_MAX_LENGTH, "%s", name);
     snprintf(ts->db_datapath, DATAPATH_SIZE, "%s", tsdb->datapath);
 
-    // Create the timeseries path if it doesn't exist
-    char pathbuf[PATHBUF_SIZE];
-    snprintf(pathbuf, sizeof(pathbuf), "%s/%s/%s", BASE_PATH, tsdb->datapath,
-             ts->name);
-
-    if (makedir(pathbuf) < 0)
-        perror("make dir");
-
     if (ts_init(ts) < 0) {
         ts_close(ts);
         free(ts);
@@ -131,7 +122,7 @@ static int ts_chunk_init(timeseries_chunk_t *tc, const char *path,
         tc->points[i] = (record_array_t){0};
 
     if (wal_init(&tc->wal, path, tc->base_offset, main) < 0)
-        return -1;
+        return TS_E_WAL_INIT_FAIL;
 
     return 0;
 }
@@ -225,7 +216,7 @@ static int ts_chunk_set_record(timeseries_chunk_t *tc, uint64_t sec,
         ssize_t i = 0;
         da_bsearch(&tc->points[index], &point, record_cmp, &i);
         if (i < 0)
-            return -1;
+            return TS_E_UNKNOWN;
         // Simple shift of existing elements, maybe worth adding a
         // support vector for out of order (in chunk range) records and
         // merge them when flushing, must profile NB WAL doesn't need any
@@ -252,14 +243,14 @@ static int ts_chunk_load(timeseries_chunk_t *tc, const char *pathbuf,
 
     int err = wal_load(&tc->wal, pathbuf, base_timestamp, main);
     if (err < 0)
-        return -1;
+        return TS_E_WAL_LOAD_FAIL;
 
     uint8_t *buf = malloc(tc->wal.size + 1);
     if (!buf)
-        return -1;
+        return TS_E_OOM;
     ssize_t n = read_file(tc->wal.fp, buf);
     if (n < 0)
-        return -1;
+        return TS_E_UNKNOWN;
 
     tc->base_offset = base_timestamp;
     for (int i = 0; i < TS_CHUNK_SIZE; ++i)
@@ -276,7 +267,8 @@ static int ts_chunk_load(timeseries_chunk_t *tc, const char *pathbuf,
         uint64_t sec  = timestamp / (uint64_t)1e9;
         uint64_t nsec = timestamp % (uint64_t)1e9;
 
-        ts_chunk_set_record(tc, sec, nsec, value);
+        if ((err = ts_chunk_set_record(tc, sec, nsec, value)) < 0)
+            return err;
 
         ptr += sizeof(uint64_t) + sizeof(double_t);
         n -= (sizeof(uint64_t) + sizeof(double_t));
@@ -289,16 +281,18 @@ static int ts_chunk_load(timeseries_chunk_t *tc, const char *pathbuf,
 
 int ts_init(timeseries_t *ts)
 {
-    char pathbuf[PATHBUF_SIZE];
-    snprintf(pathbuf, sizeof(pathbuf), "%s/%s/%s", BASE_PATH, ts->db_datapath,
-             ts->name);
+    snprintf(ts->pathbuf, sizeof(ts->pathbuf), "%s/%s/%s", BASE_PATH,
+             ts->db_datapath, ts->name);
+
+    if (makedir(ts->pathbuf) < 0)
+        return TS_E_UNKNOWN;
 
     ts_chunk_zero(&ts->head);
     ts_chunk_zero(&ts->head);
 
     struct dirent **namelist;
     int err = 0, ok = 0;
-    int n = scandir(pathbuf, &namelist, NULL, alphasort);
+    int n = scandir(ts->pathbuf, &namelist, NULL, alphasort);
     if (n == -1)
         goto exit;
 
@@ -308,16 +302,16 @@ int ts_init(timeseries_t *ts)
             strncmp(dot, ".log", 4) == 0) {
             uint64_t base_timestamp = atoll(namelist[i]->d_name + 6);
             if (namelist[i]->d_name[4] == 'h') {
-                err = ts_chunk_load(&ts->head, pathbuf, base_timestamp, 1);
+                err = ts_chunk_load(&ts->head, ts->pathbuf, base_timestamp, 1);
             } else if (namelist[i]->d_name[4] == 't') {
-                err = ts_chunk_load(&ts->prev, pathbuf, base_timestamp, 0);
+                err = ts_chunk_load(&ts->prev, ts->pathbuf, base_timestamp, 0);
             }
             ok = err == 0;
         } else if (namelist[i]->d_name[0] == 'c') {
             // There is a log partition
             uint64_t base_timestamp = atoll(namelist[i]->d_name + 3);
-            err = partition_load(&ts->partitions[ts->partition_nr++], pathbuf,
-                                 base_timestamp);
+            err = partition_load(&ts->partitions[ts->partition_nr++],
+                                 ts->pathbuf, base_timestamp);
         }
 
         free(namelist[i]);
@@ -354,13 +348,87 @@ static int ts_flush_prev(timeseries_t *ts, const char *path)
     partition_t *pt = &ts->partitions[ts->partition_nr];
 
     if (!pt->initialized && partition_init(pt, path, ts->head.base_offset) < 0)
-        return -1;
+        return TS_E_FLUSH_CHUNK_FAIL;
 
     if (partition_flush_chunk(pt, &ts->prev) < 0)
-        return -1;
+        return TS_E_FLUSH_CHUNK_FAIL;
 
     // Clean up the prev chunk and delete it's WAL
     ts_chunk_destroy(&ts->prev);
+
+    return 0;
+}
+
+/**
+ * Handle insertion of a timestamp that's earlier than the current head chunk.
+ *
+ * @param ts Pointer to the timeseries.
+ * @param pathbuf Path to the timeseries data files.
+ * @param timestamp Full timestamp in nanoseconds.
+ * @param sec Seconds part of the timestamp.
+ * @param nsec Nanoseconds part of the timestamp.
+ * @param value Value to insert.
+ * @return 0 on success, error code on failure.
+ */
+static int ts_handle_out_of_order_insert(timeseries_t *ts, uint64_t timestamp,
+                                         uint64_t sec, uint64_t nsec,
+                                         double_t value)
+{
+    // If the chunk is empty, it also means the base offset is 0, we set
+    // it here with the first record inserted
+    if (ts->prev.base_offset == 0) {
+        ts_chunk_init(&ts->prev, ts->pathbuf, sec, 0);
+    }
+
+    // If we successfully insert the record, we can return
+    if (ts_chunk_record_fit(&ts->prev, sec) == 0) {
+        // Persist to disk for disaster recovery
+        if (wal_append(&ts->prev.wal, timestamp, value) < 0)
+            return TS_E_WAL_APPEND_FAIL;
+
+        return ts_chunk_set_record(&ts->prev, sec, nsec, value);
+    }
+
+    // Check if the record is older than the prev
+    if (ts_chunk_record_fit(&ts->prev, sec) < 0) {
+        // Flush current prev to make room for a new one
+        if (ts_flush_prev(ts, ts->pathbuf) < 0)
+            return TS_E_FLUSH_CHUNK_FAIL;
+
+        // Promote a new prev chunk for the OOO insert
+        if (ts_chunk_init(&ts->prev, ts->pathbuf, sec, 0) < 0)
+            return TS_E_UNKNOWN;
+
+        // Persist to disk for disaster recovery
+        if (wal_append(&ts->prev.wal, timestamp, value) < 0)
+            return TS_E_WAL_APPEND_FAIL;
+
+        return ts_chunk_set_record(&ts->prev, sec, nsec, value);
+    }
+
+    return TS_E_UNKNOWN;
+}
+
+/**
+ * Rotate chunks when a new head chunk is needed.
+ *
+ * @param ts Pointer to the timeseries.
+ * @param pathbuf Path to the timeseries data files.
+ * @param sec Seconds part of the timestamp.
+ * @return 0 on success, error code on failure.
+ */
+static int ts_rotate_chunks(timeseries_t *ts, uint64_t sec)
+{
+    // Flush current prev chunk to disk
+    if (ts_flush_prev(ts, ts->pathbuf) < 0)
+        return TS_E_FLUSH_CHUNK_FAIL;
+    // Set the current head as new prev
+    ts->prev = ts->head;
+
+    // Reset the current head as new head
+    ts_chunk_destroy(&ts->head);
+    if (ts_chunk_init(&ts->head, ts->pathbuf, sec, 1) < 0)
+        return TS_E_UNKNOWN;
 
     return 0;
 }
@@ -380,14 +448,12 @@ static int ts_flush_prev(timeseries_t *ts, const char *path)
  */
 int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
 {
+    if (!ts)
+        return TS_E_NULL_POINTER;
+
     // Extract seconds and nanoseconds from timestamp
     uint64_t sec  = timestamp / (uint64_t)1e9;
     uint64_t nsec = timestamp % (uint64_t)1e9;
-
-    // TODO move to struct field
-    char pathbuf[PATHBUF_SIZE];
-    snprintf(pathbuf, sizeof(pathbuf), "%s/%s/%s", BASE_PATH, ts->db_datapath,
-             ts->name);
 
     // if the limit is reached we dump the chunks into disk and create 2 new
     // ones
@@ -398,22 +464,22 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
 
         partition_t *pt     = &ts->partitions[ts->partition_nr];
         if (ts->partitions[partition_nr].clog.base_timestamp < base) {
-            if (!pt->initialized && partition_init(pt, pathbuf, base) < 0) {
-                return -1;
+            if (!pt->initialized && partition_init(pt, ts->pathbuf, base) < 0) {
+                return TS_E_INIT_PARTITION_FAIL;
             }
             partition_nr = ts->partition_nr++;
         }
 
-        if (!pt->initialized && partition_init(pt, pathbuf, base) < 0) {
-            return -1;
+        if (!pt->initialized && partition_init(pt, ts->pathbuf, base) < 0) {
+            return TS_E_INIT_PARTITION_FAIL;
         }
 
         // Dump chunks into disk and create new ones
         if (partition_flush_chunk(pt, &ts->prev) < 0)
-            return -1;
+            return TS_E_FLUSH_PARTITION_FAIL;
 
         if (partition_flush_chunk(pt, &ts->head) < 0)
-            return -1;
+            return TS_E_FLUSH_PARTITION_FAIL;
 
         // Reset clean both head and prev in-memory chunks
         ts_deinit(ts);
@@ -423,48 +489,23 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
     // should we do if we receive a timestamp that is smaller than both the head
     // base and the prev base?
     if (sec < ts->head.base_offset) {
-        // If the chunk is empty, it also means the base offset is 0, we set
-        // it here with the first record inserted
-        if (ts->prev.base_offset == 0) {
-            ts_chunk_init(&ts->prev, pathbuf, sec, 0);
-        }
-
-        // If we successfully insert the record, we can return
-        if (ts_chunk_record_fit(&ts->prev, sec) == 0) {
-            // Persist to disk for disaster recovery
-            wal_append(&ts->prev.wal, timestamp, value);
-            return ts_chunk_set_record(&ts->prev, sec, nsec, value);
-        }
-
-        // Check if the record is older than the prev
-        if (ts_chunk_record_fit(&ts->prev, sec) < 0) {
-            if (ts_flush_prev(ts, pathbuf) < 0)
-                return -1;
-            // Promote a new prev chunk for the OOO insert
-            ts_chunk_init(&ts->prev, pathbuf, sec, 0);
-
-            // Persist to disk for disaster recovery
-            wal_append(&ts->prev.wal, timestamp, value);
-            return ts_chunk_set_record(&ts->prev, sec, nsec, value);
-        }
+        return ts_handle_out_of_order_insert(ts, timestamp, sec, nsec, value);
     }
 
-    if (ts->head.base_offset == 0)
-        ts_chunk_init(&ts->head, pathbuf, sec, 1);
+    if (ts->head.base_offset == 0 &&
+        ts_chunk_init(&ts->head, ts->pathbuf, sec, 1) < 0)
+        return TS_E_UNKNOWN;
 
     // Persist to disk for disaster recovery
-    wal_append(&ts->head.wal, timestamp, value);
+    if (wal_append(&ts->head.wal, timestamp, value) < 0)
+        return TS_E_WAL_APPEND_FAIL;
+
     // Check if the timestamp is in range of the current chunk, otherwise
     // create a new in-memory segment
-    if (ts_chunk_record_fit(&ts->head, sec) > 0) {
-        if (ts_flush_prev(ts, pathbuf) < 0)
-            return -1;
-        // Set the current head as new prev
-        ts->prev = ts->head;
-        // Reset the current head as new head
-        ts_chunk_destroy(&ts->head);
-        ts_chunk_init(&ts->head, pathbuf, sec, 1);
-    }
+    if (ts_chunk_record_fit(&ts->head, sec) > 0 &&
+        ts_rotate_chunks(ts, sec) < 0)
+        return TS_E_UNKNOWN;
+
     // Insert it into the head chunk
     return ts_chunk_set_record(&ts->head, sec, nsec, value);
 }
@@ -520,8 +561,8 @@ int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r)
     record_t target = {.timestamp = timestamp};
     int err         = 0;
 
+    // First check the current chunk
     if (ts->head.base_offset > 0 && ts->head.base_offset <= sec) {
-        // First check the current chunk
         err = ts_search_index(&ts->head, sec, &target, r);
         if (err <= 0)
             return err;
@@ -630,64 +671,117 @@ static int fetch_records_from_partition(const partition_t *partition,
     return 0;
 }
 
+/**
+ * Check if the requested range is within the head chunk.
+ *
+ * @param ts Pointer to the timeseries.
+ * @param sec0 Seconds part of the start timestamp.
+ * @param start Start timestamp in nanoseconds.
+ * @return true if range is in head chunk, false otherwise.
+ */
+static inline bool is_range_in_head_chunk(const timeseries_t *ts, uint64_t sec0,
+                                          uint64_t start)
+{
+    return (ts->head.base_offset > 0 && ts->head.base_offset <= sec0 &&
+            ts->head.start_ts <= start &&
+            sec0 - ts->head.base_offset <= TS_CHUNK_SIZE);
+}
+
+/**
+ * Check if the requested range is within the prev chunk.
+ *
+ * @param ts Pointer to the timeseries.
+ * @param sec0 Seconds part of the start timestamp.
+ * @param end End timestamp in nanoseconds.
+ * @return true if range is in prev chunk, false otherwise.
+ */
+static inline bool is_range_in_prev_chunk(const timeseries_t *ts, uint64_t sec0,
+                                          uint64_t end)
+{
+    return (ts->prev.base_offset > 0 && ts->prev.base_offset <= sec0 &&
+            ts->prev.start_ts <= end &&
+            sec0 - ts->prev.base_offset <= TS_CHUNK_SIZE);
+}
+
+static size_t find_starting_partition(const timeseries_t *ts, uint64_t start)
+{
+    size_t partition_i = 0;
+
+    while (partition_i < ts->partition_nr &&
+           ts->partitions[partition_i].end_ts < start)
+        partition_i++;
+
+    return partition_i;
+}
+
+/**
+ * Retrieve records from a timeseries within a specified time range.
+ *
+ * This function fetches all records with timestamps between start and end
+ * from the given timeseries and stores them in the provided output array.
+ *
+ * @param ts A pointer to the timeseries to query.
+ * @param start The start timestamp of the range, in nanoseconds.
+ * @param end The end timestamp of the range, in nanoseconds.
+ * @param out Pointer to a record_array_t to store the results.
+ * @return 0 on success, error code on failure.
+ */
 int ts_range(const timeseries_t *ts, uint64_t start, uint64_t end,
              record_array_t *out)
 {
+    if (!ts || !out)
+        return TS_E_NULL_POINTER;
+
+    if (start > end) {
+        return TS_E_INVALID_RANGE;
+    }
+
     uint64_t sec0 = start / (uint64_t)1e9;
-    // Check if the range falls in the current chunk
-    if (ts->head.base_offset > 0 && ts->head.base_offset <= sec0 &&
-        ts->head.start_ts <= start) {
-        // The starting timestamp is in the future, return not found
-        if (sec0 - ts->head.base_offset > TS_CHUNK_SIZE)
-            return -1;
+
+    // Check if the range falls in the head chunk
+    if (is_range_in_head_chunk(ts, sec0, start)) {
         ts_chunk_range(&ts->head, start, end, out);
-    } else if (ts->prev.base_offset > 0 && ts->prev.base_offset <= sec0 &&
-               ts->prev.start_ts <= end) {
-        // TODO remove
-        // The starting timestamp is in the future for the prev chunk, this
-        // shouldn't happen
-        if (sec0 - ts->prev.base_offset > TS_CHUNK_SIZE)
-            return -1;
+        return 0;
+    }
+
+    // Check if the range falls in the prev chunk
+    if (is_range_in_prev_chunk(ts, sec0, end)) {
         ts_chunk_range(&ts->prev, start, end, out);
-    } else {
-        // Search in the persistence
-        size_t partition_i        = 0;
-        const partition_t *curr_p = NULL;
+        return 0;
+    }
 
-        // Find the starting partition
-        while (partition_i < ts->partition_nr &&
-               ts->partitions[partition_i].end_ts < start)
+    // Search in the persistence
+    const partition_t *curr_p = NULL;
+    size_t partition_i        = find_starting_partition(ts, start);
+
+    // Fetch records from partitions within the time range
+    while (partition_i < ts->partition_nr &&
+           ts->partitions[partition_i].start_ts <= end) {
+        curr_p = &ts->partitions[partition_i];
+
+        // Fetch records from the current partition
+        if (curr_p->end_ts >= end) {
+            if (fetch_records_from_partition(curr_p, start, end, out) < 0)
+                return -1;
+            return 0;
+        } else {
+            if (fetch_records_from_partition(curr_p, start, curr_p->end_ts,
+                                             out) < 0)
+                return -1;
+            start = curr_p->end_ts;
             partition_i++;
-
-        // Fetch records from partitions within the time range
-        while (partition_i < ts->partition_nr &&
-               ts->partitions[partition_i].start_ts <= end) {
-            curr_p = &ts->partitions[partition_i];
-
-            // Fetch records from the current partition
-            if (curr_p->end_ts >= end) {
-                if (fetch_records_from_partition(curr_p, start, end, out) < 0)
-                    return -1;
-                return 0;
-            } else {
-                if (fetch_records_from_partition(curr_p, start, curr_p->end_ts,
-                                                 out) < 0)
-                    return -1;
-                start = curr_p->end_ts;
-                partition_i++;
-            }
         }
+    }
 
-        // Fetch records from the previous chunk if it exists
-        if (ts->prev.base_offset != 0) {
-            ts_chunk_range(&ts->prev, start, end, out);
-            start = da_back(&ts->prev.points[ts->prev.max_index]).timestamp;
-        }
+    // Fetch records from the previous chunk if it exists
+    if (ts->prev.base_offset != 0) {
+        ts_chunk_range(&ts->prev, start, end, out);
+        start = da_back(&ts->prev.points[ts->prev.max_index]).timestamp;
+    }
 
-        // Fetch records from the current chunk if it exists
-        if (ts->head.base_offset != 0) {
-            ts_chunk_range(&ts->head, ts->head.start_ts, end, out);
-        }
+    // Fetch records from the current chunk if it exists
+    if (ts->head.base_offset != 0) {
+        ts_chunk_range(&ts->head, ts->head.start_ts, end, out);
     }
 
     return 0;

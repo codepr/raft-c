@@ -20,3 +20,4 @@ raft-cli
 raft_state.*
 logs
 logdata
+raft-c-tests
