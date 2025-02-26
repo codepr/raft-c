@@ -1,6 +1,6 @@
 #include "client.h"
 #include "encoding.h"
-#include "parser.h"
+#include "statement.h"
 #include "timeutil.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -77,17 +77,17 @@ static void runclidbg(client_t *c)
 {
     char *line      = NULL;
     size_t line_len = 0LL;
-    ast_node_t *stm = NULL;
+    stmt_t *stmt    = NULL;
 
     while (1) {
         prompt(c);
         getline(&line, &line_len, stdin);
 
-        stm = ast_parse(line);
+        stmt = stmt_parse(line);
         printf("\n");
-        print_ast_node(stm);
+        stmt_print(stmt);
         printf("\n");
-        ast_free(stm);
+        stmt_free(stmt);
     }
     free(line);
 }

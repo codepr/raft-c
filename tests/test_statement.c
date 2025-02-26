@@ -1,4 +1,4 @@
-#include "../src/parser.h"
+#include "../src/statement.h"
 #include "test_helpers.h"
 #include "tests.h"
 #include <stdio.h>
@@ -8,11 +8,11 @@ static int parse_create_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    ast_node_t *ast = ast_parse("CREATE test-db");
+    stmt_t *stmt = stmt_parse("CREATE test-db");
 
-    ASSERT_SEQ(ast->create.db_name, "test-db");
+    ASSERT_SEQ(stmt->create.db_name, "test-db");
 
-    ast_free(ast);
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -23,12 +23,12 @@ static int parse_create_ts_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    ast_node_t *ast = ast_parse("CREATE ts-test INTO test-db");
+    stmt_t *stmt = stmt_parse("CREATE ts-test INTO test-db");
 
-    ASSERT_SEQ(ast->create.db_name, "test-db");
-    ASSERT_SEQ(ast->create.ts_name, "ts-test");
+    ASSERT_SEQ(stmt->create.db_name, "test-db");
+    ASSERT_SEQ(stmt->create.ts_name, "ts-test");
 
-    ast_free(ast);
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -39,16 +39,16 @@ static int parse_insert_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    ast_node_t *ast =
-        ast_parse("INSERT test-ts INTO test-db 87829132377 12.2344");
+    stmt_t *stmt =
+        stmt_parse("INSERT test-ts INTO test-db 87829132377 12.2344");
 
-    ASSERT_EQ(ast->insert.record_array.length, 1);
-    ASSERT_EQ(ast->insert.record_array.items[0].timestamp, 87829132377);
-    ASSERT_FEQ(ast->insert.record_array.items[0].value, 12.2344);
-    ASSERT_SEQ(ast->insert.db_name, "test-db");
-    ASSERT_SEQ(ast->insert.ts_name, "test-ts");
+    ASSERT_EQ(stmt->insert.record_array.length, 1);
+    ASSERT_EQ(stmt->insert.record_array.items[0].timestamp, 87829132377);
+    ASSERT_FEQ(stmt->insert.record_array.items[0].value, 12.2344);
+    ASSERT_SEQ(stmt->insert.db_name, "test-db");
+    ASSERT_SEQ(stmt->insert.ts_name, "test-ts");
 
-    ast_free(ast);
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -59,15 +59,15 @@ static int parse_insert_wildcard_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    ast_node_t *ast = ast_parse("INSERT test-ts INTO test-db * 12.2344");
+    stmt_t *stmt = stmt_parse("INSERT test-ts INTO test-db * 12.2344");
 
-    ASSERT_EQ(ast->insert.record_array.length, 1);
-    ASSERT_EQ(ast->insert.record_array.items[0].timestamp, -1);
-    ASSERT_FEQ(ast->insert.record_array.items[0].value, 12.2344);
-    ASSERT_SEQ(ast->insert.db_name, "test-db");
-    ASSERT_SEQ(ast->insert.ts_name, "test-ts");
+    ASSERT_EQ(stmt->insert.record_array.length, 1);
+    ASSERT_EQ(stmt->insert.record_array.items[0].timestamp, -1);
+    ASSERT_FEQ(stmt->insert.record_array.items[0].value, 12.2344);
+    ASSERT_SEQ(stmt->insert.db_name, "test-db");
+    ASSERT_SEQ(stmt->insert.ts_name, "test-ts");
 
-    ast_free(ast);
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -108,18 +108,18 @@ static int parse_insert_multi_test(void)
         offset += written;
     }
 
-    ast_node_t *ast = ast_parse(query);
+    stmt_t *stmt = stmt_parse(query);
 
-    ASSERT_EQ(ast->insert.record_array.length, records_len);
-    ASSERT_SEQ(ast->insert.db_name, "test-db");
-    ASSERT_SEQ(ast->insert.ts_name, "test-ts");
+    ASSERT_EQ(stmt->insert.record_array.length, records_len);
+    ASSERT_SEQ(stmt->insert.db_name, "test-db");
+    ASSERT_SEQ(stmt->insert.ts_name, "test-ts");
 
     for (size_t i = 0; i < records_len; ++i) {
-        ASSERT_EQ(ast->insert.record_array.items[i].timestamp, timestamps[i]);
-        ASSERT_FEQ(ast->insert.record_array.items[i].value, values[i]);
+        ASSERT_EQ(stmt->insert.record_array.items[i].timestamp, timestamps[i]);
+        ASSERT_FEQ(stmt->insert.record_array.items[i].value, values[i]);
     }
 
-    ast_free(ast);
+    stmt_free(stmt);
     free(timestamps);
     free(values);
     free(query);
@@ -133,11 +133,11 @@ static int parse_delete_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    ast_node_t *ast = ast_parse("DELETE test-db");
+    stmt_t *stmt = stmt_parse("DELETE test-db");
 
-    ASSERT_SEQ(ast->delete.db_name, "test-db");
+    ASSERT_SEQ(stmt->delete.db_name, "test-db");
 
-    ast_free(ast);
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -148,12 +148,12 @@ static int parse_delete_ts_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    ast_node_t *ast = ast_parse("DELETE ts-test FROM test-db");
+    stmt_t *stmt = stmt_parse("DELETE ts-test FROM test-db");
 
-    ASSERT_SEQ(ast->delete.db_name, "test-db");
-    ASSERT_SEQ(ast->delete.ts_name, "ts-test");
+    ASSERT_SEQ(stmt->delete.db_name, "test-db");
+    ASSERT_SEQ(stmt->delete.ts_name, "ts-test");
 
-    ast_free(ast);
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -164,34 +164,34 @@ static int parse_select_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    int rc          = 0;
+    int rc       = 0;
 
-    ast_node_t *ast = ast_parse("SELECT ts-test FROM test-db RANGE 2382913 TO "
-                                "39238293 WHERE test-value > 12.2 AND "
-                                "test-value < 16.2 AGGREGATE AVG BY 10");
+    stmt_t *stmt = stmt_parse("SELECT ts-test FROM test-db RANGE 2382913 TO "
+                              "39238293 WHERE test-value > 12.2 AND "
+                              "test-value < 16.2 AGGREGATE AVG BY field");
 
-    if (!ast) {
+    if (!stmt) {
         fprintf(stderr, "FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
 
-    ASSERT_SEQ(ast->select.db_name, "test-db");
-    ASSERT_SEQ(ast->select.ts_name, "ts-test");
-    ASSERT_EQ(ast->select.interval, 10);
-    ASSERT_EQ(ast->select.af, AFN_AVG);
-    ASSERT_EQ(ast->select.start_time, 2382913);
-    ASSERT_EQ(ast->select.end_time, 39238293);
-    ASSERT_EQ(ast->select.where->boolean_op, BOOL_AND);
-    ASSERT_FEQ(ast->select.where->value, 12.2);
-    ASSERT_EQ(ast->select.where->operator, OP_GT);
-    ASSERT_FEQ(ast->select.where->right->value, 16.2);
-    ASSERT_EQ(ast->select.where->right->operator, OP_LT);
+    ASSERT_SEQ(stmt->select.db_name, "test-db");
+    ASSERT_SEQ(stmt->select.ts_name, "ts-test");
+    ASSERT_SEQ(stmt->select.group_by, "field");
+    ASSERT_EQ(stmt->select.agg_function, AGG_AVG);
+    ASSERT_EQ(stmt->select.start_time, 2382913);
+    ASSERT_EQ(stmt->select.end_time, 39238293);
+    ASSERT_EQ(stmt->select.where->boolean_op, BOOL_OP_AND);
+    ASSERT_FEQ(stmt->select.where->value, 12.2);
+    ASSERT_EQ(stmt->select.where->operator, OP_GREATER);
+    ASSERT_FEQ(stmt->select.where->right->value, 16.2);
+    ASSERT_EQ(stmt->select.where->right->operator, OP_LESS);
 
     printf("PASS\n");
 
 exit:
-    ast_free(ast);
+    stmt_free(stmt);
 
     return rc;
 }

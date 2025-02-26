@@ -5,7 +5,7 @@
 #include "iomux.h"
 #include "logger.h"
 #include "network.h"
-#include "parser.h"
+#include "statement.h"
 #include "timeseries.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -31,156 +31,340 @@
 // testing dummy
 static timeseries_db_t *db = NULL;
 
-static response_t execute_statement(const ast_node_t *stm)
+/**
+ * Get the active database instance
+ * This is a placeholder function assuming the database handle is stored
+ * globally
+ */
+static timeseries_db_t *get_active_db(void)
 {
-    response_t rs    = {0};
-    record_t r       = {0};
-    timeseries_t *ts = NULL;
-    int err          = 0;
-    struct timespec tv;
+    // This would need to be implemented based on your application structure
+    // For example, it might be stored in a global variable or passed as context
+    return db;
+}
 
-    switch (stm->type) {
-    case STATEMENT_CREATE:
-        if (!stm->create.single) {
-            db = tsdb_init(stm->create.db_name);
-            if (!db)
-                goto err;
+/**
+ * Process a CREATE statement and generate appropriate response
+ *
+ * @param ast The parsed AST node for the CREATE statement
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_create(const stmt_t *stmt, response_t *response)
+{
+    timeseries_db_t *tsdb = get_active_db();
+    timeseries_t *ts      = NULL;
+
+    response->type        = STRING_RSP;
+
+    if (stmt->create.single) {
+        // Create database only
+        // (Implementation would depend on how database creation is handled)
+        response->string_response.rc     = 0;
+        response->string_response.length = snprintf(
+            response->string_response.message, QUERYSIZE,
+            "Database '%s' created successfully", stmt->create.db_name);
+    } else {
+        // Create timeseries
+        ts = ts_create(tsdb, stmt->create.ts_name, stmt->create.retention,
+                       (duplication_policy_t)stmt->create.duplication);
+
+        if (ts) {
+            response->string_response.rc     = 0;
+            response->string_response.length = snprintf(
+                response->string_response.message, QUERYSIZE,
+                "TimeSeries '%s' created successfully in database '%s'",
+                stmt->create.ts_name, stmt->create.db_name);
         } else {
-            if (!db)
-                db = tsdb_init(stm->create.db_name);
-
-            if (!db)
-                goto err;
-
-            ts = ts_create(db, stm->create.ts_name, 0, DP_IGNORE);
+            response->string_response.rc     = 1;
+            response->string_response.length = snprintf(
+                response->string_response.message, QUERYSIZE,
+                "Failed to create TimeSeries '%s'", stmt->create.ts_name);
         }
-        if (!ts)
-            goto err;
-        else
-            add_string_response(rs, "Ok", 0);
+    }
+}
+
+/**
+ * Process a DELETE statement and generate appropriate response
+ *
+ * @param ast The parsed AST node for the DELETE statement
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_delete(const stmt_t *stmt, response_t *response)
+{
+    response->type = STRING_RSP;
+
+    // Currently, deletion is not directly supported in the provided API
+    // This would need to be implemented based on your database design
+    if (stmt->delete.single) {
+        // Delete entire database (not implemented in the provided headers)
+        response->string_response.rc = 1;
+        response->string_response.length =
+            snprintf(response->string_response.message, QUERYSIZE,
+                     "Error: Database deletion not supported");
+    } else {
+        // Delete a time series (not implemented in the provided headers)
+        // You would need to add a ts_delete function to your API
+        response->string_response.rc = 1;
+        response->string_response.length =
+            snprintf(response->string_response.message, QUERYSIZE,
+                     "Error: TimeSeries deletion not supported");
+    }
+}
+
+/**
+ * Process an INSERT statement and generate appropriate response
+ *
+ * @param ast The parsed AST node for the INSERT statement
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_insert(const stmt_t *stmt, response_t *response)
+{
+    timeseries_db_t *tsdb = get_active_db();
+    timeseries_t *ts      = ts_get(tsdb, stmt->insert.ts_name);
+    int success_count     = 0;
+    int error_count       = 0;
+
+    response->type        = STRING_RSP;
+
+    if (!ts) {
+        response->string_response.rc = 1;
+        response->string_response.length =
+            snprintf(response->string_response.message, QUERYSIZE,
+                     "Error: TimeSeries '%s' not found", stmt->insert.ts_name);
+        return;
+    }
+
+    // Insert each record
+    for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
+        stmt_record_t *record = &stmt->insert.record_array.items[i];
+
+        int result            = ts_insert(ts, record->timestamp, record->value);
+        if (result == 0) {
+            success_count++;
+        } else {
+            error_count++;
+        }
+    }
+
+    // Set response based on insertion results
+    if (error_count == 0) {
+        response->string_response.rc = 0;
+        response->string_response.length =
+            snprintf(response->string_response.message, QUERYSIZE,
+                     "Successfully inserted %d points", success_count);
+    } else {
+        response->string_response.rc     = 1;
+        response->string_response.length = snprintf(
+            response->string_response.message, QUERYSIZE,
+            "Inserted %d points with %d errors", success_count, error_count);
+    }
+}
+
+/**
+ * Process a SELECT statement and generate appropriate response
+ *
+ * @param ast The parsed AST node for the SELECT statement
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_select(const stmt_t *ast, response_t *response)
+{
+    // timeseries_db_t *tsdb  = get_active_db();
+    // timeseries_t *ts       = ts_get(tsdb, ast->select.ts_name);
+    // record_array_t records = {0};
+    //
+    // if (!ts) {
+    //     response->type               = STRING_RSP;
+    //     response->string_response.rc = 1;
+    //     response->string_response.length =
+    //         snprintf(response->string_response.message, QUERYSIZE,
+    //                  "Error: TimeSeries '%s' not found",
+    //                  ast->select.ts_name);
+    //     return;
+    // }
+
+    // Query data based on select mask
+    // if (ast->select.mask & SM_SINGLE) {
+    //     // Single point query
+    //     record_t record;
+    //     if (ts_find(ts, ast->select.start_time, &record) == 0) {
+    //         // Prepare array response with single record
+    //         response->type                  = ARRAY_RSP;
+    //         response->array_response.length = 1;
+    //         response->array_response.records =
+    //             malloc(sizeof(*response->array_response.records));
+    //         if (!response->array_response.records) {
+    //             response->type               = STRING_RSP;
+    //             response->string_response.rc = 1;
+    //             response->string_response.length =
+    //                 snprintf(response->string_response.message, QUERYSIZE,
+    //                          "Error: Memory allocation failed");
+    //             return;
+    //         }
+    //         response->array_response.records[0].timestamp = record.timestamp;
+    //         response->array_response.records[0].value     = record.value;
+    //     } else {
+    //         response->type               = STRING_RSP;
+    //         response->string_response.rc = 1;
+    //         response->string_response.length =
+    //             snprintf(response->string_response.message, QUERYSIZE,
+    //                      "Error: Point not found at timestamp %" PRIu64,
+    //                      ast->select.start_time);
+    //     }
+    // } else if (ast->select.mask & SM_RANGE) {
+    //     // Range query
+    //     int result = ts_range(ts, ast->select.start_time,
+    //     ast->select.end_time,
+    //                           &records);
+    //
+    //     if (result == 0 && records.length > 0) {
+    //         // Prepare array response from records
+    //         response->type                   = ARRAY_RSP;
+    //         response->array_response.length  = records.length;
+    //         response->array_response.records = malloc(
+    //             records.length * sizeof(*response->array_response.records));
+    //
+    //         if (!response->array_response.records) {
+    //             response->type               = STRING_RSP;
+    //             response->string_response.rc = 1;
+    //             response->string_response.length =
+    //                 snprintf(response->string_response.message, QUERYSIZE,
+    //                          "Error: Memory allocation failed");
+    //             return;
+    //         }
+    //
+    //         for (size_t i = 0; i < records.length; i++) {
+    //             response->array_response.records[i].timestamp =
+    //                 records.items[i].timestamp;
+    //             response->array_response.records[i].value =
+    //                 records.items[i].value;
+    //         }
+    //
+    //         // Free the record array items (data has been copied)
+    //         free(records.items);
+    //     } else {
+    //         response->type = STRING_RSP;
+    //         if (result != 0) {
+    //             response->string_response.rc     = 1;
+    //             response->string_response.length = snprintf(
+    //                 response->string_response.message, QUERYSIZE,
+    //                 "Error: Failed to query range [%" PRIu64 ", %" PRIu64
+    //                 "]", ast->select.start_time, ast->select.end_time);
+    //         } else {
+    //             response->string_response.rc     = 0;
+    //             response->string_response.length = snprintf(
+    //                 response->string_response.message, QUERYSIZE,
+    //                 "No data found in range [%" PRIu64 ", %" PRIu64 "]",
+    //                 ast->select.start_time, ast->select.end_time);
+    //         }
+    //     }
+    // } else {
+    //     // Unsupported query type
+    //     response->type               = STRING_RSP;
+    //     response->string_response.rc = 1;
+    //     response->string_response.length =
+    //         snprintf(response->string_response.message, QUERYSIZE,
+    //                  "Error: Unsupported query type");
+    // }
+}
+
+static response_t execute_statement(const stmt_t *stmt)
+{
+    response_t rs = {0};
+    if (!stmt) {
+        // Handle parse error with a string response
+        rs.type               = STRING_RSP;
+        rs.string_response.rc = 1; // Error code
+        rs.string_response.length =
+            snprintf(rs.string_response.message, QUERYSIZE,
+                     "Error: Failed to parse the query");
+        goto exit;
+    }
+
+    switch (stmt->type) {
+    case STMT_CREATE:
+        execute_create(stmt, &rs);
         break;
-    case STATEMENT_INSERT:
-        if (!db)
-            db = tsdb_init(stm->insert.db_name);
-
-        if (!db)
-            goto err;
-
-        ts = ts_get(db, stm->insert.ts_name);
-        if (!ts)
-            goto err_not_found;
-
-        uint64_t timestamp = 0;
-        for (size_t i = 0; i < stm->insert.record_array.length; ++i) {
-            if (stm->insert.record_array.items[i].timestamp == -1) {
-                clock_gettime(CLOCK_REALTIME, &tv);
-                timestamp = tv.tv_sec * (uint64_t)1e9 + tv.tv_nsec;
-            } else {
-                timestamp = stm->insert.record_array.items[i].timestamp;
-            }
-
-            err = ts_insert(ts, timestamp,
-                            stm->insert.record_array.items[i].value);
-            if (err < 0)
-                goto err;
-            else
-                add_string_response(rs, "Ok", 0);
-        }
-
+    case STMT_INSERT:
+        execute_insert(stmt, &rs);
         break;
-    case STATEMENT_SELECT:
-        if (!db)
-            db = tsdb_init(stm->select.db_name);
-
-        if (!db)
-            goto err;
-
-        ts = ts_get(db, stm->select.ts_name);
-        if (!ts)
-            goto err_not_found;
-
-        int err = 0;
-
-        record_array_t coll;
-
-        if (stm->select.mask & SM_SINGLE) {
-            err = ts_find(ts, stm->select.start_time, &r);
-            if (err < 0) {
-                log_error("Couldn't find the record %" PRIu64,
-                          stm->select.start_time);
-                goto err_not_found;
-            } else {
-                log_info("Record found: %" PRIu64 " %.2lf", r.timestamp,
-                         r.value);
-                rs.type                  = ARRAY_RSP;
-                rs.array_response.length = 1;
-                rs.array_response.records =
-                    calloc(1, sizeof(*rs.array_response.records));
-                rs.array_response.records[0].timestamp = r.timestamp;
-                rs.array_response.records[0].value     = r.value;
-            }
-        } else if (stm->select.mask & SM_RANGE) {
-            err = ts_range(ts, stm->select.start_time, stm->select.end_time,
-                           &coll);
-            if (err < 0) {
-                log_error("Couldn't find the record %" PRIu64,
-                          stm->select.start_time);
-            } else {
-                for (size_t i = 0; i < coll.length; i++) {
-                    record_t r = coll.items[i];
-                    log_info(" %" PRIu64
-                             " {.sec: %li, .nsec: %li .value: %.02f }",
-                             r.timestamp, r.tv.tv_sec, r.tv.tv_nsec, r.value);
-                }
-            }
-            rs.array_response.length = coll.length;
-            for (size_t i = 0; i < coll.length; ++i) {
-                rs.array_response.records[i].timestamp = r.timestamp;
-                rs.array_response.records[i].value     = r.value;
-            }
-        }
+    case STMT_SELECT:
+        execute_select(stmt, &rs);
+        break;
+    case STMT_DELETE:
+        execute_delete(stmt, &rs);
         break;
     default:
-        log_error("Unknown command");
+        // Unknown statement type (should not happen due to earlier check)
+        rs.type               = STRING_RSP;
+        rs.string_response.rc = 1;
+        rs.string_response.length =
+            snprintf(rs.string_response.message, QUERYSIZE,
+                     "Error: Unsupported statement type");
         break;
     }
 
-    if (ts)
-        ts_close(ts);
-
-    return rs;
-
-err:
-    add_string_response(rs, "Err", err);
-    return rs;
-
-err_not_found:
-
-    add_string_response(rs, "Not found", err);
+exit:
     return rs;
 }
 
 static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
 {
-    request_t rq          = {0};
-    response_t rs         = {0};
-    ast_node_t *statement = NULL;
+    request_t rq                 = {0};
+    response_t rs                = {0};
+    ssize_t bytes_read           = 0;
+    ssize_t bytes_written        = 0;
+    uint8_t response_buf[BUFSIZ] = {0};
+    stmt_t *stmt                 = {0};
 
-    ssize_t n             = decode_request(buf, &rq);
-    if (n < 0) {
-        log_error("Can't decode a request from data");
+    bytes_read                   = decode_request(buf, &rq);
+    if (bytes_read < 0) {
+        log_error("Failed to decode client request: %zd", bytes_read);
         rs.type               = STRING_RSP;
         rs.string_response.rc = 1;
         strncpy(rs.string_response.message, "Err", 4);
         rs.string_response.length = 4;
-    } else {
-        log_info("Payload received");
-        // Parse into Statement
-        statement = ast_parse(rq.query);
-        // Execute it
-        rs        = execute_statement(statement);
+        goto exit;
     }
-    return 1;
+
+    log_debug("Received query: %.*s", (int)rq.length, rq.query);
+    // Parse into Statement
+    stmt          = stmt_parse(rq.query);
+    // Execute it
+    rs            = execute_statement(stmt);
+
+    // Encode the response
+
+    bytes_written = encode_response(&rs, response_buf);
+    if (bytes_written <= 0) {
+        log_error("Failed to encode response: %zd", bytes_written);
+        if (stmt)
+            stmt_free(stmt);
+        if (rs.type == ARRAY_RSP)
+            free_response(&rs);
+        return -1;
+    }
+
+    // Send the response back to the client
+    ssize_t sent = send_nonblocking(fd, response_buf, bytes_written);
+    if (sent != bytes_written) {
+        log_error("Failed to send complete response: %zd/%zd", sent,
+                  bytes_written);
+        if (stmt)
+            stmt_free(stmt);
+        if (rs.type == ARRAY_RSP)
+            free_response(&rs);
+        return -1;
+    }
+
+    // Clean up
+    if (stmt)
+        stmt_free(stmt);
+    if (rs.type == ARRAY_RSP)
+        free_response(&rs);
+
+exit:
+
+    return bytes_read;
 }
 
 static ssize_t handle_peer(int fd, iomux_t *iomux, uint8_t buf[BUFSIZ])

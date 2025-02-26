@@ -1,7 +1,8 @@
-#ifndef PARSER_H
-#define PARSER_H
+#ifndef STATEMENT_H
+#define STATEMENT_H
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -64,29 +65,21 @@ string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
 typedef struct token token_t;
 
 // Define aggregate function types
-typedef enum { AFN_NONE, AFN_AVG, AFN_MIN, AFN_MAX } aggregate_fn_t;
+typedef enum { AGG_NONE, AGG_AVG, AGG_MIN, AGG_MAX } aggregate_fn_t;
 
 // Define operator types
-typedef enum { OP_NONE, OP_EQ, OP_NE, OP_GE, OP_GT, OP_LE, OP_LT } operator_t;
+typedef enum {
+    OP_NONE,
+    OP_EQUAL,
+    OP_NOT_EQUAL,
+    OP_GREATER_EQUAL,
+    OP_GREATER,
+    OP_LESS_EQUAL,
+    OP_LESS
+} operator_t;
 
 // Define boolean operators
-typedef enum { BOOL_NONE, BOOL_AND } boolean_op_t;
-
-/*
- * Select mask, to define the kind of type of query
- * - Single point lookup
- * - Range of points
- * - With a WHERE clause
- * - With an aggregation function
- * - With an interval to aggregate on
- */
-typedef enum select_mask {
-    SM_SINGLE    = 0x01,
-    SM_RANGE     = 0x02,
-    SM_WHERE     = 0x04,
-    SM_AGGREGATE = 0x08,
-    SM_BY        = 0x10
-} select_mask_t;
+typedef enum { BOOL_OP_NONE, BOOL_OP_AND, BOOL_OP_OR } boolean_op_t;
 
 // Define structure for CREATE statement
 typedef struct {
@@ -95,20 +88,20 @@ typedef struct {
     char ts_name[IDENTIFIER_LENGTH];
     int retention;
     int duplication;
-} ast_node_create_t;
+} stmt_create_t;
 
 // Define structure for DELETE statement
 typedef struct {
     int single;
     char db_name[IDENTIFIER_LENGTH];
     char ts_name[IDENTIFIER_LENGTH];
-} ast_node_delete_t;
+} stmt_delete_t;
 
 // Define a pair (timestamp, value) for INSERT statements
 typedef struct {
     int64_t timestamp;
     double_t value;
-} ast_node_record_t;
+} stmt_record_t;
 
 // Define structure for INSERT statement
 typedef struct {
@@ -117,21 +110,21 @@ typedef struct {
     struct {
         size_t length;
         size_t capacity;
-        ast_node_record_t *items;
+        stmt_record_t *items;
     } record_array;
-} ast_node_insert_t;
+} stmt_insert_t;
 
 // Define structure for WHERE clause in SELECT statement
-typedef struct ast_node_where {
+typedef struct where_clause {
     char key[IDENTIFIER_LENGTH];
     operator_t operator;
     double_t value;
 
-    struct ast_node_where *left;
-    struct ast_node_where *right;
+    struct where_clause *left;
+    struct where_clause *right;
     boolean_op_t boolean_op;
 
-} ast_node_where_t;
+} where_clause_t;
 
 // Define structure for SELECT statement
 typedef struct {
@@ -139,35 +132,58 @@ typedef struct {
     char ts_name[IDENTIFIER_LENGTH];
     int64_t start_time;
     int64_t end_time;
-    aggregate_fn_t af;
-    ast_node_where_t *where;
-    uint64_t interval;
-    select_mask_t mask;
-} ast_node_select_t;
+
+    // WHERE clause
+    where_clause_t *where;
+
+    // AGGREGATE information
+    aggregate_fn_t agg_function;
+    char group_by[IDENTIFIER_LENGTH]; // The "BY" identifier in the grammar
+} stmt_select_t;
 
 // Define statement types
 typedef enum {
-    STATEMENT_EMPTY,
-    STATEMENT_CREATE,
-    STATEMENT_DELETE,
-    STATEMENT_INSERT,
-    STATEMENT_SELECT,
-    STATEMENT_UNKNOWN
-} ast_node_type_t;
+    STMT_EMPTY,
+    STMT_CREATE,
+    STMT_DELETE,
+    STMT_INSERT,
+    STMT_SELECT,
+    STMT_UNKNOWN
+} stmt_type_t;
 
 // Define a generic statement
 typedef struct {
-    ast_node_type_t type;
+    stmt_type_t type;
     union {
-        ast_node_create_t create;
-        ast_node_delete_t delete;
-        ast_node_insert_t insert;
-        ast_node_select_t select;
+        stmt_create_t create;
+        stmt_delete_t delete;
+        stmt_insert_t insert;
+        stmt_select_t select;
     };
-} ast_node_t;
+} stmt_t;
 
-ast_node_t *ast_parse(const char *input);
-void ast_free(ast_node_t *node);
-void print_ast_node(const ast_node_t *node);
+stmt_t *stmt_parse(const char *input);
+void stmt_free(stmt_t *stmt);
+void stmt_print(const stmt_t *stmt);
+
+// Create statement builders
+stmt_t *stmt_make_empty();
+stmt_t *stmt_make_create(bool single, const char *db_name, const char *ts_name,
+                         int retention, int duplication);
+stmt_t *stmt_make_delete(bool single, const char *db_name, const char *ts_name);
+stmt_t *stmt_make_insert(const char *db_name, const char *ts_name);
+bool stmt_insert_add_record(stmt_t *stmt, int64_t timestamp, double value);
+stmt_t *stmt_make_select(const char *db_name, const char *ts_name,
+                         int64_t start_time, int64_t end_time,
+                         aggregate_fn_t agg_function, uint64_t interval);
+where_clause_t *stmt_make_where_condition(const char *key, operator_t op,
+                                          double value);
+bool stmt_add_where_condition(where_clause_t *base, boolean_op_t op,
+                              where_clause_t *condition);
+bool stmt_set_where_clause(stmt_t *stmt, where_clause_t *where);
+
+// Helper functions for parsing specific parts
+operator_t stmt_parse_operator(const char *op_str);
+aggregate_fn_t stmt_parse_aggregate_function(const char *agg_str);
 
 #endif

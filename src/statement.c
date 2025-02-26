@@ -1,4 +1,4 @@
-#include "parser.h"
+#include "statement.h"
 #include "darray.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -203,6 +203,17 @@ static ssize_t tokenize(const char *query, token_array_t *token_array)
     return token_array->length;
 }
 
+// Helper function to safely copy identifiers
+static void copy_identifier(char *dest, const char *src)
+{
+    size_t len = strlen(src);
+    if (len >= IDENTIFIER_LENGTH) {
+        len = IDENTIFIER_LENGTH - 1;
+    }
+    strncpy(dest, src, len);
+    dest[len] = '\0';
+}
+
 typedef struct {
     token_t *tokens;
     size_t pos;
@@ -233,28 +244,28 @@ static char *expect_identifier(parser_t *p)
 static int expect_operator(parser_t *p)
 {
     token_t *t    = parser_peek(p);
-    operator_t op = OP_EQ;
+    operator_t op = OP_EQUAL;
 
     switch (t->type) {
     case TOKEN_OPERATOR_EQ:
         break;
     case TOKEN_OPERATOR_NE:
-        op = OP_NE;
+        op = OP_NOT_EQUAL;
         break;
     case TOKEN_OPERATOR_LE:
-        op = OP_LE;
+        op = OP_LESS_EQUAL;
         break;
 
     case TOKEN_OPERATOR_GE:
-        op = OP_GE;
+        op = OP_GREATER_EQUAL;
         break;
 
     case TOKEN_OPERATOR_LT:
-        op = OP_LT;
+        op = OP_LESS;
         break;
 
     case TOKEN_OPERATOR_GT:
-        op = OP_GT;
+        op = OP_GREATER;
         break;
 
     default:
@@ -270,16 +281,16 @@ static int expect_operator(parser_t *p)
 static int expect_aggregatefn(parser_t *p)
 {
     token_t *t        = parser_peek(p);
-    aggregate_fn_t fn = AFN_AVG;
+    aggregate_fn_t fn = AGG_AVG;
 
     switch (t->type) {
     case TOKEN_AGGREGATE_AVG:
         break;
     case TOKEN_AGGREGATE_MAX:
-        fn = AFN_MAX;
+        fn = AGG_MAX;
         break;
     case TOKEN_AGGREGATE_MIN:
-        fn = AFN_MIN;
+        fn = AGG_MIN;
         break;
     default:
         fprintf(stderr, "Unexpected aggregate fn token: %s at %zu\n",
@@ -331,21 +342,21 @@ static int expect_boolean(parser_t *p)
 {
     if (expect(p, TOKEN_AND) < 0)
         return -1;
-    return BOOL_AND;
+    return BOOL_OP_AND;
 }
 
-static void ast_node_where_free(ast_node_where_t *node)
+static void where_clause_free(where_clause_t *node)
 {
     if (!node)
         return;
 
-    ast_node_where_free(node->right);
+    where_clause_free(node->right);
     free(node);
 }
 
-static ast_node_where_t *parse_where(parser_t *p)
+static where_clause_t *parse_where(parser_t *p)
 {
-    ast_node_where_t *node = calloc(1, sizeof(*node));
+    where_clause_t *node = calloc(1, sizeof(*node));
     if (!node)
         return NULL;
 
@@ -353,7 +364,8 @@ static ast_node_where_t *parse_where(parser_t *p)
     if (!key)
         goto err;
 
-    strncpy(node->key, key, IDENTIFIER_LENGTH);
+    copy_identifier(node->key, key);
+
     node->operator= expect_operator(p);
     if (node->operator<0)
         goto err;
@@ -372,17 +384,17 @@ static ast_node_where_t *parse_where(parser_t *p)
     return node;
 
 err:
-    ast_node_where_free(node);
+    where_clause_free(node);
     return NULL;
 }
 
-static ast_node_t *parse_create(parser_t *p)
+static stmt_t *parse_create(parser_t *p)
 {
-    ast_node_t *node = calloc(1, sizeof(*node));
+    stmt_t *node = calloc(1, sizeof(*node));
     if (!node)
         return NULL;
 
-    node->type                     = STATEMENT_CREATE;
+    node->type                     = STMT_CREATE;
     node->create.single            = 1;
     char tsname[IDENTIFIER_LENGTH] = {0};
 
@@ -393,17 +405,19 @@ static ast_node_t *parse_create(parser_t *p)
     if (!tsid)
         goto err;
 
-    strncpy(tsname, tsid, IDENTIFIER_LENGTH);
+    copy_identifier(tsname, tsid);
 
     if (parser_peek(p)->type == TOKEN_INTO) {
         node->create.single = 0;
         if (expect(p, TOKEN_INTO) < 0)
             goto err;
+
         char *dbname = expect_identifier(p);
         if (!dbname)
             goto err;
-        strncpy(node->create.db_name, dbname, IDENTIFIER_LENGTH);
-        strncpy(node->create.ts_name, tsname, sizeof(tsname));
+
+        copy_identifier(node->create.db_name, dbname);
+        copy_identifier(node->create.ts_name, tsname);
 
         if (parser_peek(p)->type == TOKEN_NUMBER &&
             expect_integer(p, (int64_t *)&node->create.retention) < 0)
@@ -412,7 +426,7 @@ static ast_node_t *parse_create(parser_t *p)
             expect_integer(p, (int64_t *)&node->create.duplication) < 0)
             goto err;
     } else {
-        strncpy(node->create.db_name, tsname, sizeof(tsname));
+        copy_identifier(node->create.db_name, tsname);
     }
 
     return node;
@@ -422,13 +436,13 @@ err:
     return NULL;
 }
 
-static ast_node_t *parse_delete(parser_t *p)
+static stmt_t *parse_delete(parser_t *p)
 {
-    ast_node_t *node = calloc(1, sizeof(*node));
+    stmt_t *node = calloc(1, sizeof(*node));
     if (!node)
         return NULL;
 
-    node->type                     = STATEMENT_DELETE;
+    node->type                     = STMT_DELETE;
     node->delete.single            = 1;
     char tsname[IDENTIFIER_LENGTH] = {0};
 
@@ -439,20 +453,22 @@ static ast_node_t *parse_delete(parser_t *p)
     if (!tsid)
         goto err;
 
-    strncpy(tsname, tsid, IDENTIFIER_LENGTH);
+    copy_identifier(tsname, tsid);
 
     if (parser_peek(p)->type == TOKEN_FROM) {
         node->delete.single = 0;
         if (expect(p, TOKEN_FROM) < 0)
             goto err;
+
         char *dbname = expect_identifier(p);
         if (!dbname)
             goto err;
-        strncpy(node->delete.db_name, dbname, IDENTIFIER_LENGTH);
-        strncpy(node->delete.ts_name, tsname, sizeof(tsname));
+
+        copy_identifier(node->delete.db_name, dbname);
+        copy_identifier(node->delete.ts_name, tsname);
 
     } else {
-        strncpy(node->delete.db_name, tsname, sizeof(tsname));
+        copy_identifier(node->delete.db_name, tsname);
     }
 
     return node;
@@ -462,13 +478,13 @@ err:
     return NULL;
 }
 
-static ast_node_t *parse_insert(parser_t *p)
+static stmt_t *parse_insert(parser_t *p)
 {
-    ast_node_t *node = calloc(1, sizeof(*node));
+    stmt_t *node = calloc(1, sizeof(*node));
     if (!node)
         return NULL;
 
-    node->type = STATEMENT_INSERT;
+    node->type = STMT_INSERT;
 
     if (expect(p, TOKEN_INSERT) < 0)
         goto err;
@@ -477,7 +493,7 @@ static ast_node_t *parse_insert(parser_t *p)
     if (!tsname)
         goto err;
 
-    strncpy(node->insert.ts_name, tsname, IDENTIFIER_LENGTH);
+    copy_identifier(node->insert.ts_name, tsname);
 
     if (expect(p, TOKEN_INTO) < 0)
         goto err;
@@ -486,9 +502,9 @@ static ast_node_t *parse_insert(parser_t *p)
     if (!dbname)
         goto err;
 
-    strncpy(node->insert.db_name, dbname, IDENTIFIER_LENGTH);
+    copy_identifier(node->insert.db_name, dbname);
 
-    ast_node_record_t record = {0};
+    stmt_record_t record = {0};
     while (parser_peek(p)->type == TOKEN_WILDCARD ||
            parser_peek(p)->type == TOKEN_NUMBER) {
 
@@ -506,13 +522,13 @@ err:
     return NULL;
 }
 
-static ast_node_t *parse_select(parser_t *p)
+static stmt_t *parse_select(parser_t *p)
 {
-    ast_node_t *node = calloc(1, sizeof(*node));
+    stmt_t *node = calloc(1, sizeof(*node));
     if (!node)
         return NULL;
 
-    node->type              = STATEMENT_SELECT;
+    node->type              = STMT_SELECT;
     node->select.start_time = -1;
     node->select.end_time   = -1;
 
@@ -523,7 +539,7 @@ static ast_node_t *parse_select(parser_t *p)
     if (!tsname)
         goto err;
 
-    strncpy(node->select.ts_name, tsname, IDENTIFIER_LENGTH);
+    copy_identifier(node->select.ts_name, tsname);
 
     if (expect(p, TOKEN_FROM) < 0)
         goto err;
@@ -532,7 +548,7 @@ static ast_node_t *parse_select(parser_t *p)
     if (!dbname)
         goto err;
 
-    strncpy(node->select.db_name, dbname, IDENTIFIER_LENGTH);
+    copy_identifier(node->select.db_name, dbname);
 
     if (parser_peek(p)->type == TOKEN_RANGE) {
         if (expect(p, TOKEN_RANGE) < 0)
@@ -554,15 +570,19 @@ static ast_node_t *parse_select(parser_t *p)
     if (parser_peek(p)->type == TOKEN_AGGREGATE) {
         if (expect(p, TOKEN_AGGREGATE) < 0)
             goto err;
-        node->select.af = expect_aggregatefn(p);
-        if (node->select.af < 0)
+        node->select.agg_function = expect_aggregatefn(p);
+        if (node->select.agg_function < 0)
             goto err;
 
         if (parser_peek(p)->type == TOKEN_BY) {
             if (expect(p, TOKEN_BY) < 0)
                 goto err;
-            if (expect_integer(p, (int64_t *)&node->select.interval) < 0)
+
+            char *groupby = expect_identifier(p);
+            if (!groupby)
                 goto err;
+
+            copy_identifier(node->select.group_by, groupby);
         }
     }
 
@@ -573,11 +593,11 @@ err:
     return NULL;
 }
 
-ast_node_t *ast_parse(const char *input)
+stmt_t *stmt_parse(const char *input)
 {
     token_array_t token_array = {0};
     size_t token_count        = tokenize(input, &token_array);
-    ast_node_t *node          = NULL;
+    stmt_t *node              = NULL;
 
     if (token_count < 1)
         goto err;
@@ -607,19 +627,19 @@ err:
     return node;
 }
 
-void ast_free(ast_node_t *node)
+void stmt_free(stmt_t *node)
 {
     if (!node)
         return;
 
     switch (node->type) {
-    case STATEMENT_CREATE:
-    case STATEMENT_INSERT:
+    case STMT_CREATE:
+    case STMT_INSERT:
         free(node);
         break;
-    case STATEMENT_SELECT:
+    case STMT_SELECT:
         if (node->select.where)
-            ast_node_where_free(node->select.where);
+            where_clause_free(node->select.where);
         free(node);
         break;
     default:
@@ -627,73 +647,213 @@ void ast_free(ast_node_t *node)
     }
 }
 
-static void print_create(const ast_node_create_t *create)
+// Create an empty statement
+stmt_t *stmt_make_empty()
 {
-    printf("ASTNode<create>\n");
-    if (create->single) {
-        printf("  dbname=%s\n", create->db_name);
+    stmt_t *stmt = malloc(sizeof(stmt_t));
+    if (!stmt)
+        return NULL;
+
+    stmt->type = STMT_EMPTY;
+    return stmt;
+}
+
+// Create a CREATE statement
+stmt_t *stmt_make_create(bool single, const char *db_name, const char *ts_name,
+                         int retention, int duplication)
+{
+    stmt_t *stmt = malloc(sizeof(stmt_t));
+    if (!stmt)
+        return NULL;
+
+    stmt->type          = STMT_CREATE;
+    stmt->create.single = single;
+    copy_identifier(stmt->create.db_name, db_name);
+
+    if (ts_name) {
+        copy_identifier(stmt->create.ts_name, ts_name);
     } else {
-        printf("  tsname=%s\n", create->ts_name);
-        printf("  into=%s\n", create->db_name);
+        stmt->create.ts_name[0] = '\0';
     }
-    if (create->retention)
-        printf("  retention=%i\n", create->retention);
-    if (create->duplication)
-        printf("  duplication=%i\n", create->duplication);
+
+    stmt->create.retention   = retention;
+    stmt->create.duplication = duplication;
+
+    return stmt;
 }
 
-static void print_delete(const ast_node_delete_t *delete)
+// Create a DELETE statement
+stmt_t *stmt_make_delete(bool single, const char *db_name, const char *ts_name)
 {
-    printf("ASTNode<delete>\n");
-    if (delete->single) {
-        printf("  dbname=%s\n", delete->db_name);
+    stmt_t *stmt = malloc(sizeof(stmt_t));
+    if (!stmt)
+        return NULL;
+
+    stmt->type          = STMT_DELETE;
+    stmt->delete.single = single;
+    copy_identifier(stmt->delete.db_name, db_name);
+
+    if (ts_name) {
+        copy_identifier(stmt->delete.ts_name, ts_name);
     } else {
-        printf("  tsname=%s\n", delete->ts_name);
-        printf("  from=%s\n", delete->db_name);
+        stmt->delete.ts_name[0] = '\0';
     }
+
+    return stmt;
 }
 
-static void print_insert(const ast_node_insert_t *insert)
+// Create an INSERT statement
+stmt_t *stmt_make_insert(const char *db_name, const char *ts_name)
 {
-    printf("ASTNode<insert>\n");
-    printf("  tsname=%s\n", insert->ts_name);
-    printf("  into=%s\n", insert->db_name);
-    printf("  values=\n");
-    for (size_t i = 0; i < insert->record_array.length; ++i) {
-        printf("    - (%" PRId64 ", %.2f)\n",
-               insert->record_array.items[i].timestamp,
-               insert->record_array.items[i].value);
-    }
+    stmt_t *stmt = malloc(sizeof(stmt_t));
+    if (!stmt)
+        return NULL;
+
+    stmt->type = STMT_INSERT;
+    copy_identifier(stmt->insert.db_name, db_name);
+    copy_identifier(stmt->insert.ts_name, ts_name);
+
+    return stmt;
 }
 
-static void print_where(const ast_node_where_t *where)
+// Add a record to an INSERT statement
+bool stmt_insert_add_record(stmt_t *stmt, int64_t timestamp, double value)
+{
+    if (!stmt || stmt->type != STMT_INSERT)
+        return false;
+
+    stmt_record_t record = {.value = value, .timestamp = timestamp};
+
+    da_append(&stmt->insert.record_array, record);
+
+    return true;
+}
+
+// Create a SELECT statement
+stmt_t *stmt_make_select(const char *db_name, const char *ts_name,
+                         int64_t start_time, int64_t end_time,
+                         aggregate_fn_t agg_function, uint64_t interval)
+{
+    stmt_t *stmt = malloc(sizeof(stmt_t));
+    if (!stmt)
+        return NULL;
+
+    stmt->type = STMT_SELECT;
+    copy_identifier(stmt->select.db_name, db_name);
+    copy_identifier(stmt->select.ts_name, ts_name);
+
+    stmt->select.start_time   = start_time;
+    stmt->select.end_time     = end_time;
+    stmt->select.agg_function = agg_function;
+    stmt->select.where        = NULL;
+
+    return stmt;
+}
+
+// Create a WHERE condition
+where_clause_t *stmt_make_where_condition(const char *key, operator_t op,
+                                          double value)
+{
+    where_clause_t *condition = malloc(sizeof(where_clause_t));
+    if (!condition)
+        return NULL;
+
+    copy_identifier(condition->key, key);
+    condition->operator= op;
+    condition->value      = value;
+    condition->left       = NULL;
+    condition->right      = NULL;
+    condition->boolean_op = BOOL_OP_NONE;
+
+    return condition;
+}
+
+// Add a WHERE condition to an existing condition tree
+bool stmt_add_where_condition(where_clause_t *base, boolean_op_t op,
+                              where_clause_t *condition)
+{
+    if (!base || !condition)
+        return false;
+
+    // If the base condition doesn't have a boolean operator yet, add this
+    // condition
+    if (base->boolean_op == BOOL_OP_NONE) {
+        base->boolean_op = op;
+        base->left       = malloc(sizeof(where_clause_t));
+        if (!base->left)
+            return false;
+
+        // Copy current base condition to left child
+        memcpy(base->left, base, sizeof(where_clause_t));
+        base->left->left       = NULL;
+        base->left->right      = NULL;
+        base->left->boolean_op = BOOL_OP_NONE;
+
+        // Set the right child to the new condition
+        base->right            = condition;
+
+        // Clear the base condition's key and operator
+        base->key[0]           = '\0';
+        return true;
+    }
+
+    // Otherwise, recursively add to the right subtree
+    where_clause_t *new_parent = malloc(sizeof(where_clause_t));
+    if (!new_parent)
+        return false;
+
+    new_parent->boolean_op = op;
+    new_parent->left       = base->right;
+    new_parent->right      = condition;
+    new_parent->key[0]     = '\0';
+
+    base->right            = new_parent;
+    return true;
+}
+
+// Set the WHERE clause for a SELECT statement
+bool stmt_set_where_clause(stmt_t *stmt, where_clause_t *where)
+{
+    if (!stmt || stmt->type != STMT_SELECT)
+        return false;
+
+    // Free existing WHERE clause if present
+    if (stmt->select.where) {
+        // Would need a recursive free function here
+        free(stmt->select.where);
+    }
+
+    stmt->select.where = where;
+    return true;
+}
+
+static void print_where(const where_clause_t *where)
 {
     if (!where)
         return;
 
-    printf("  ASTNode<where>\n");
     printf("    key=%s\n", where->key);
 
     switch (where->operator) {
     case OP_NONE:
         printf("    operator=NONE\n");
         break;
-    case OP_EQ:
+    case OP_EQUAL:
         printf("    operator=EQ\n");
         break;
-    case OP_NE:
+    case OP_NOT_EQUAL:
         printf("    operator=NE\n");
         break;
-    case OP_GE:
+    case OP_GREATER_EQUAL:
         printf("    operator=GE\n");
         break;
-    case OP_LE:
+    case OP_LESS_EQUAL:
         printf("    operator=LE\n");
         break;
-    case OP_GT:
+    case OP_GREATER:
         printf("    operator=GT\n");
         break;
-    case OP_LT:
+    case OP_LESS:
         printf("    operator=LT\n");
         break;
     }
@@ -702,60 +862,69 @@ static void print_where(const ast_node_where_t *where)
 
     if (where->right)
         printf("    boolean=%s\n",
-               where->boolean_op == BOOL_AND ? "AND" : "NA");
+               where->boolean_op == BOOL_OP_AND ? "AND" : "NA");
 
     print_where(where->right);
 }
 
-static void print_select(const ast_node_select_t *select)
+// Print a statement for debugging
+void stmt_print(const stmt_t *stmt)
 {
-    printf("ASTNode<select>\n");
-    if (*select->db_name)
-        printf("  dbname: %s\n", select->db_name);
-    if (*select->ts_name)
-        printf("  tsname: %s\n", select->ts_name);
-    if (select->start_time)
-        printf("  starttime: %lli\n", select->start_time);
-    if (select->end_time)
-        printf("  endtime: %lli\n", select->end_time);
-    if (select->where)
-        print_where(select->where);
-    switch (select->af) {
-    case AFN_AVG:
-        printf("  aggregate: AVG\n");
-        break;
-    case AFN_MIN:
-        printf("  aggregate: MIN\n");
-        break;
-    case AFN_MAX:
-        printf("  aggregate: MAX\n");
-        break;
-    default:
-        break;
-    }
-    if (select->interval)
-        printf("  interval: %llu\n", select->interval);
-}
-
-void print_ast_node(const ast_node_t *node)
-{
-    if (!node)
+    if (!stmt) {
+        printf("NULL statement\n");
         return;
-    switch (node->type) {
-    case STATEMENT_CREATE:
-        print_create(&node->create);
+    }
+
+    switch (stmt->type) {
+    case STMT_EMPTY:
+        printf("Empty statement\n");
         break;
-    case STATEMENT_INSERT:
-        print_insert(&node->insert);
+
+    case STMT_CREATE:
+        printf("CREATE statement:\n");
+        printf("  Single: %s\n", stmt->create.single ? "true" : "false");
+        printf("  DB Name: %s\n", stmt->create.db_name);
+        if (!stmt->create.single) {
+            printf("  TS Name: %s\n", stmt->create.ts_name);
+            printf("  Retention: %d\n", stmt->create.retention);
+            printf("  Duplication: %d\n", stmt->create.duplication);
+        }
         break;
-    case STATEMENT_SELECT:
-        print_select(&node->select);
+
+    case STMT_DELETE:
+        printf("DELETE statement:\n");
+        printf("  Single: %s\n", stmt->delete.single ? "true" : "false");
+        printf("  DB Name: %s\n", stmt->delete.db_name);
+        if (!stmt->delete.single) {
+            printf("  TS Name: %s\n", stmt->delete.ts_name);
+        }
         break;
-    case STATEMENT_DELETE:
-        print_delete(&node->delete);
+
+    case STMT_INSERT:
+        printf("INSERT statement:\n");
+        printf("  DB Name: %s\n", stmt->insert.db_name);
+        printf("  TS Name: %s\n", stmt->insert.ts_name);
+        printf("  Records (%zu):\n", stmt->insert.record_array.length);
+        for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
+            printf("    [%" PRIu64 "] = %f\n",
+                   stmt->insert.record_array.items[i].timestamp,
+                   stmt->insert.record_array.items[i].value);
+        }
         break;
-    default:
-        printf("Unrecognized node\n");
+
+    case STMT_SELECT:
+        printf("SELECT statement:\n");
+        printf("  DB Name: %s\n", stmt->select.db_name);
+        printf("  TS Name: %s\n", stmt->select.ts_name);
+        printf("  Time Range: %" PRIi64 " to %" PRIi64 "\n",
+               stmt->select.start_time, stmt->select.end_time);
+        printf("  Aggregate Function: %d\n", stmt->select.agg_function);
+        printf("  WHERE Clause:\n");
+        print_where(stmt->select.where);
+        break;
+
+    case STMT_UNKNOWN:
+        printf("Unknown statement\n");
         break;
     }
 }

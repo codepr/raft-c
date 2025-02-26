@@ -14,7 +14,7 @@ LDFLAGS = -L. -lraft
 
 RAFT_C_SRC = src/timeutil.c    \
              src/iomux.c       \
-             src/parser.c      \
+             src/statement.c      \
              src/config.c      \
              src/binary.c      \
              src/storage.c     \
@@ -43,16 +43,16 @@ CLI_SRC = src/client.c      \
           src/network.c     \
           src/encoding.c    \
           src/binary.c      \
-          src/parser.c      \
+          src/statement.c      \
           src/timeutil.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 CLI_EXEC = raft-cli
 
 TEST_SRC = tests/tests.c           \
            tests/test_helpers.c    \
-           tests/test_parser.c     \
+           tests/test_statement.c     \
            tests/timeseries_test.c \
-           src/parser.c            \
+           src/statement.c            \
            src/timeseries.c        \
            src/timeutil.c          \
            src/wal.c               \
