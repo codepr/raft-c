@@ -60,6 +60,11 @@ string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
  ** E.g.
  **
  ** INSERT cputime INTO load * 12.2 * 19.2 829232932 11.56
+ **
+ ** Meta commands
+ **
+ ** META_CMD    ::= ".databases" | ".timeseries"
+ **
  **/
 
 typedef struct token token_t;
@@ -144,12 +149,15 @@ typedef struct {
 // Define statement types
 typedef enum {
     STMT_EMPTY,
+    STMT_META,
     STMT_CREATE,
     STMT_DELETE,
     STMT_INSERT,
     STMT_SELECT,
     STMT_UNKNOWN
 } stmt_type_t;
+
+typedef enum { META_DATABASES, META_TIMESERIES, META_UNKNOWN } meta_command_t;
 
 // Define a generic statement
 typedef struct {
@@ -159,6 +167,7 @@ typedef struct {
         stmt_delete_t delete;
         stmt_insert_t insert;
         stmt_select_t select;
+        meta_command_t meta;
     };
 } stmt_t;
 

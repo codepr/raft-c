@@ -54,6 +54,7 @@ static string_view_t lexer_next(lexer_t *l)
 
 // Define token types
 typedef enum {
+    TOKEN_META,
     TOKEN_CREATE,
     TOKEN_INSERT,
     TOKEN_INTO,
@@ -106,7 +107,13 @@ static int tokenize_next(lexer_t *l, token_t *t)
 
     // Main commands
 
-    if (strncasecmp(token.p, "CREATE", 6) == 0) {
+    if (strncasecmp(token.p, ".databases", 10) == 0) {
+        length  = 10;
+        t->type = TOKEN_META;
+    } else if (strncasecmp(token.p, ".timeseries", 11) == 0) {
+        length  = 11;
+        t->type = TOKEN_META;
+    } else if (strncasecmp(token.p, "CREATE", 6) == 0) {
         length  = 6;
         t->type = TOKEN_CREATE;
     } else if (strncasecmp(token.p, "INSERT", 6) == 0) {
@@ -237,6 +244,13 @@ static int expect(parser_t *p, token_type_t type)
 static char *expect_identifier(parser_t *p)
 {
     if (expect(p, TOKEN_IDENTIFIER) < 0)
+        return NULL;
+    return p->tokens[p->pos - 1].value;
+}
+
+static char *expect_meta(parser_t *p)
+{
+    if (expect(p, TOKEN_META) < 0)
         return NULL;
     return p->tokens[p->pos - 1].value;
 }
@@ -385,6 +399,29 @@ static where_clause_t *parse_where(parser_t *p)
 
 err:
     where_clause_free(node);
+    return NULL;
+}
+
+static stmt_t *parse_meta(parser_t *p)
+{
+    stmt_t *node = calloc(1, sizeof(*node));
+    if (!node)
+        return NULL;
+
+    node->type = STMT_META;
+
+    char *meta = expect_meta(p);
+    if (!meta)
+        goto err;
+
+    node->meta = strncasecmp(meta, ".databases", 10) == 0    ? META_DATABASES
+                 : strncasecmp(meta, ".timeseries", 11) == 0 ? META_TIMESERIES
+                                                             : META_UNKNOWN;
+
+    return node;
+
+err:
+    free(node);
     return NULL;
 }
 
@@ -605,6 +642,9 @@ stmt_t *stmt_parse(const char *input)
     parser_t parser = {.tokens = token_array.items, .pos = 0};
 
     switch (token_array.items[0].type) {
+    case TOKEN_META:
+        node = parse_meta(&parser);
+        break;
     case TOKEN_CREATE:
         node = parse_create(&parser);
         break;
@@ -923,6 +963,12 @@ void stmt_print(const stmt_t *stmt)
         print_where(stmt->select.where);
         break;
 
+    case STMT_META:
+        printf("METACMD statement:\n");
+        printf("  %s\n", stmt->meta == META_DATABASES    ? ".databases"
+                         : stmt->meta == META_TIMESERIES ? ".timeseries"
+                                                         : "unknown");
+        break;
     case STMT_UNKNOWN:
         printf("Unknown statement\n");
         break;

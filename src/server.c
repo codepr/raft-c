@@ -103,6 +103,18 @@ static void execute_delete(const stmt_t *stmt, response_t *response)
 }
 
 /**
+ * Process a META statement and generate appropriate response
+ *
+ * @param stmt The statement representing a META instruction
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_meta(const stmt_t *stmt, response_t *response)
+{
+    // Currently, meta is not directly supported in the provided API
+    not_implemented(response);
+}
+
+/**
  * Process an INSERT statement and generate appropriate response
  *
  * @param stmt The statement representing an INSERT instruction
@@ -283,6 +295,9 @@ static response_t execute_statement(const stmt_t *stmt)
         break;
     case STMT_DELETE:
         execute_delete(stmt, &rs);
+        break;
+    case STMT_META:
+        execute_meta(stmt, &rs);
         break;
     default:
         // Unknown statement type (should not happen due to earlier check)
