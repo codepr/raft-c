@@ -566,6 +566,7 @@ static stmt_t *parse_select(parser_t *p)
         return NULL;
 
     node->type              = STMT_SELECT;
+    node->select.flags      = QF_BASIC;
     node->select.start_time = -1;
     node->select.end_time   = -1;
 
@@ -596,12 +597,14 @@ static stmt_t *parse_select(parser_t *p)
             goto err;
         if (expect_integer(p, &node->select.end_time) < 0)
             goto err;
+        node->select.flags = QF_RANGE;
     }
 
     if (parser_peek(p)->type == TOKEN_WHERE) {
         if (expect(p, TOKEN_WHERE) < 0)
             goto err;
         node->select.where = parse_where(p);
+        node->select.flags |= QF_WHERE;
     }
 
     if (parser_peek(p)->type == TOKEN_AGGREGATE) {
@@ -610,6 +613,8 @@ static stmt_t *parse_select(parser_t *p)
         node->select.agg_function = expect_aggregatefn(p);
         if (node->select.agg_function < 0)
             goto err;
+
+        node->select.flags |= QF_AGGREGATE;
 
         if (parser_peek(p)->type == TOKEN_BY) {
             if (expect(p, TOKEN_BY) < 0)
@@ -620,6 +625,8 @@ static stmt_t *parse_select(parser_t *p)
                 goto err;
 
             copy_identifier(node->select.group_by, groupby);
+
+            node->select.flags |= QF_GROUPBY;
         }
     }
 

@@ -170,104 +170,97 @@ static void execute_insert(const stmt_t *stmt, response_t *response)
  */
 static void execute_select(const stmt_t *stmt, response_t *response)
 {
-    not_implemented(response);
-    // timeseries_db_t *tsdb  = tsdbmanager_getactive();
-    // timeseries_t *ts       = ts_get(tsdb, stmt->select.ts_name);
-    // record_array_t records = {0};
-    //
-    // if (!ts) {
-    //     response->type               = STRING_RSP;
-    //     response->string_response.rc = 1;
-    //     response->string_response.length =
-    //         snprintf(response->string_response.message, QUERYSIZE,
-    //                  "Error: TimeSeries '%s' not found",
-    //                  stmt->select.ts_name);
-    //     return;
-    // }
+    timeseries_db_t *tsdb = tsdbmanager_get(stmt->select.db_name);
+    if (!tsdb) {
+        set_string_response(response, 1, "Database '%s' not found",
+                            stmt->create.db_name);
+        return;
+    }
+
+    timeseries_t *ts = ts_get(tsdb, stmt->select.ts_name);
+    if (!ts) {
+        set_string_response(response, 1, "Timeseries '%s' not found",
+                            stmt->create.ts_name);
+        return;
+    }
+
+    record_array_t records = {0};
 
     // Query data based on select mask
-    // if (stmt->select.mask & SM_SINGLE) {
-    //     // Single point query
-    //     record_t record;
-    //     if (ts_find(ts, stmt->select.start_time, &record) == 0) {
-    //         // Prepare array response with single record
-    //         response->type                  = ARRAY_RSP;
-    //         response->array_response.length = 1;
-    //         response->array_response.records =
-    //             malloc(sizeof(*response->array_response.records));
-    //         if (!response->array_response.records) {
-    //             response->type               = STRING_RSP;
-    //             response->string_response.rc = 1;
-    //             response->string_response.length =
-    //                 snprintf(response->string_response.message, QUERYSIZE,
-    //                          "Error: Memory allocation failed");
-    //             return;
-    //         }
-    //         response->array_response.records[0].timestamp = record.timestamp;
-    //         response->array_response.records[0].value     = record.value;
-    //     } else {
-    //         response->type               = STRING_RSP;
-    //         response->string_response.rc = 1;
-    //         response->string_response.length =
-    //             snprintf(response->string_response.message, QUERYSIZE,
-    //                      "Error: Point not found at timestamp %" PRIu64,
-    //                      stmt->select.start_time);
-    //     }
-    // } else if (stmt->select.mask & SM_RANGE) {
-    //     // Range query
-    //     int result = ts_range(ts, stmt->select.start_time,
-    //     stmt->select.end_time,
-    //                           &records);
-    //
-    //     if (result == 0 && records.length > 0) {
-    //         // Prepare array response from records
-    //         response->type                   = ARRAY_RSP;
-    //         response->array_response.length  = records.length;
-    //         response->array_response.records = malloc(
-    //             records.length * sizeof(*response->array_response.records));
-    //
-    //         if (!response->array_response.records) {
-    //             response->type               = STRING_RSP;
-    //             response->string_response.rc = 1;
-    //             response->string_response.length =
-    //                 snprintf(response->string_response.message, QUERYSIZE,
-    //                          "Error: Memory allocation failed");
-    //             return;
-    //         }
-    //
-    //         for (size_t i = 0; i < records.length; i++) {
-    //             response->array_response.records[i].timestamp =
-    //                 records.items[i].timestamp;
-    //             response->array_response.records[i].value =
-    //                 records.items[i].value;
-    //         }
-    //
-    //         // Free the record array items (data has been copied)
-    //         free(records.items);
-    //     } else {
-    //         response->type = STRING_RSP;
-    //         if (result != 0) {
-    //             response->string_response.rc     = 1;
-    //             response->string_response.length = snprintf(
-    //                 response->string_response.message, QUERYSIZE,
-    //                 "Error: Failed to query range [%" PRIu64 ", %" PRIu64
-    //                 "]", stmt->select.start_time, stmt->select.end_time);
-    //         } else {
-    //             response->string_response.rc     = 0;
-    //             response->string_response.length = snprintf(
-    //                 response->string_response.message, QUERYSIZE,
-    //                 "No data found in range [%" PRIu64 ", %" PRIu64 "]",
-    //                 stmt->select.start_time, stmt->select.end_time);
-    //         }
-    //     }
-    // } else {
-    //     // Unsupported query type
-    //     response->type               = STRING_RSP;
-    //     response->string_response.rc = 1;
-    //     response->string_response.length =
-    //         snprintf(response->string_response.message, QUERYSIZE,
-    //                  "Error: Unsupported query type");
-    // }
+    if (stmt->select.flags & QF_BASIC) {
+        // Single point query
+        record_t record;
+        if (ts_find(ts, stmt->select.start_time, &record) == 0) {
+            // Prepare array response with single record
+            response->type                  = RT_ARRAY;
+            response->array_response.length = 1;
+            response->array_response.records =
+                malloc(sizeof(*response->array_response.records));
+            if (!response->array_response.records) {
+                set_string_response(response, 1,
+                                    "Error: Memory allocation failed");
+
+                return;
+            }
+            response->array_response.records[0].timestamp = record.timestamp;
+            response->array_response.records[0].value     = record.value;
+
+            return;
+        }
+        set_string_response(response, 1,
+                            "Error: Point not found at timestamp %" PRIu64,
+                            stmt->select.start_time);
+        return;
+    }
+
+    if (stmt->select.flags & QF_RANGE) {
+        // Range query
+        int result = ts_range(ts, stmt->select.start_time,
+                              stmt->select.end_time, &records);
+
+        if (result == 0 && records.length > 0) {
+            // Prepare array response from records
+            response->type                   = RT_ARRAY;
+            response->array_response.length  = records.length;
+            response->array_response.records = malloc(
+                records.length * sizeof(*response->array_response.records));
+
+            if (!response->array_response.records) {
+                set_string_response(response, 1,
+                                    "Error: Memory allocation failed");
+                return;
+            }
+
+            for (size_t i = 0; i < records.length; i++) {
+                response->array_response.records[i].timestamp =
+                    records.items[i].timestamp;
+                response->array_response.records[i].value =
+                    records.items[i].value;
+            }
+
+            // Free the record array items (data has been copied)
+            free(records.items);
+
+            return;
+        }
+        response->type = RT_STRING;
+        if (result != 0) {
+            set_string_response(response, 1,
+                                "Error: Failed to query range [%" PRIu64
+                                ", %" PRIu64 "]",
+                                stmt->select.start_time, stmt->select.end_time);
+        } else {
+            set_string_response(response, 0,
+                                "No data found in range [%" PRIu64 ", %" PRIu64
+                                "]",
+                                stmt->select.start_time, stmt->select.end_time);
+        }
+        return;
+    }
+
+    // Unsupported query type
+    // TODO
+    set_string_response(response, 1, "Error: Unsupported query type");
 }
 
 static response_t execute_statement(const stmt_t *stmt)

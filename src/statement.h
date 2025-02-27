@@ -119,6 +119,22 @@ typedef struct {
     } record_array;
 } stmt_insert_t;
 
+/*
+ * Select mask, to define the kind of type of query
+ * - Single point lookup
+ * - Range of points
+ * - With a WHERE clause
+ * - With an aggregation function
+ * - With an interval to aggregate on
+ */
+typedef enum query_flags {
+    QF_BASIC     = 0,
+    QF_RANGE     = 1 << 0,
+    QF_WHERE     = 1 << 1,
+    QF_AGGREGATE = 1 << 2,
+    QF_GROUPBY   = 1 << 3
+} query_flags_t;
+
 // Define structure for WHERE clause in SELECT statement
 typedef struct where_clause {
     char key[IDENTIFIER_LENGTH];
@@ -144,6 +160,7 @@ typedef struct {
     // AGGREGATE information
     aggregate_fn_t agg_function;
     char group_by[IDENTIFIER_LENGTH]; // The "BY" identifier in the grammar
+    query_flags_t flags;
 } stmt_select_t;
 
 // Define statement types
