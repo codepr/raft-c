@@ -5,11 +5,21 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+// For the time being, fixed size to keep it simple, to be allocated
+// as a future iteration
 #define QUERYSIZE 512
 
 /**
  ** Server text-based protocol
  **/
+
+typedef enum {
+    MARKER_STRING_SUCCESS = '$',
+    MARKER_STRING_ERROR   = '!',
+    MARKER_ARRAY          = '#',
+    MARKER_TIMESTAMP      = ':',
+    MARKER_VALUE          = ';'
+} protocol_marker_t;
 
 /*
  * Define a basic request, for the time being it's fine to treat
@@ -30,25 +40,27 @@ typedef struct {
     char message[QUERYSIZE];
 } string_response_t;
 
+typedef struct record {
+    uint64_t timestamp;
+    double_t value;
+} response_record_t;
+
 /*
  * Define a response of type array, mainly used as SELECT response.
  */
 typedef struct {
     size_t length;
-    struct {
-        uint64_t timestamp;
-        double_t value;
-    } *records;
+    response_record_t *records;
 } array_response_t;
 
-typedef enum { STRING_RSP, ARRAY_RSP } Response_Type;
+typedef enum { RT_STRING, RT_ARRAY } response_type_t;
 
 /*
- * Define a generic response which can either be a string response or an array
- * response for the time being
+ * Define a generic response which can either be a string response or an
+ * array response for the time being
  */
 typedef struct response {
-    Response_Type type;
+    response_type_t type;
     union {
         string_response_t string_response;
         array_response_t array_response;

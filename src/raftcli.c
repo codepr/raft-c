@@ -38,7 +38,7 @@ static void prompt(client_t *c)
 
 static void print_response(const response_t *rs)
 {
-    if (rs->type == STRING_RSP) {
+    if (rs->type == RT_STRING) {
         printf("%s\n", rs->string_response.message);
     } else {
         for (size_t i = 0; i < rs->array_response.length; ++i)
@@ -124,7 +124,7 @@ static void runcli(client_t *c)
         client_recv_response(c, &rs);
         (void)clocktime(&end_time);
         print_response(&rs);
-        if (rs.type == ARRAY_RSP) {
+        if (rs.type == RT_ARRAY) {
             delta = timespec_seconds(&end_time) - timespec_seconds(&end_time);
             printf("%lu results in %lf seconds.\n", rs.array_response.length,
                    delta);

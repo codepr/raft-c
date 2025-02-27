@@ -50,9 +50,11 @@ CLI_EXEC = raft-cli
 
 TEST_SRC = tests/tests.c           \
            tests/test_helpers.c    \
-           tests/test_statement.c     \
+           tests/encoding_test.c   \
+           tests/statement_test.c  \
            tests/timeseries_test.c \
-           src/statement.c            \
+           src/encoding.c          \
+           src/statement.c         \
            src/timeseries.c        \
            src/timeutil.c          \
            src/wal.c               \

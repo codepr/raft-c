@@ -5,196 +5,398 @@
 #include "raft.h"
 #include <string.h>
 
+#define CRLF            "\r\n"
+#define CRLF_LEN        2
+#define MAX_NUM_STR_LEN 21 // Large enough for 64-bit integers
+
+// CRLF helpers
+
+static size_t setcrlf(uint8_t *dst, size_t pos)
+{
+    dst[pos++] = '\r';
+    dst[pos++] = '\n';
+    return pos;
+}
+
+static bool iscrlf(const uint8_t *buf)
+{
+    return (buf[0] == '\r' && buf[1] == '\n');
+}
+
+static const uint8_t *skipcrlf(const uint8_t *buf) { return buf + CRLF_LEN; }
+
 static ssize_t encode_string(uint8_t *dst, const char *src, size_t length)
 {
-    size_t i = 0, j = 0;
+    if (!dst || !src || length + MAX_NUM_STR_LEN + 2 * CRLF_LEN > QUERYSIZE)
+        return -1;
+
+    size_t pos = 0;
 
     // Payload length just after the $ indicator
-    size_t n = snprintf((char *)dst, 21, "%lu", length);
-    i += n;
+    size_t n   = snprintf((char *)dst, MAX_NUM_STR_LEN, "%lu", length);
+    if (n < 0 || n >= MAX_NUM_STR_LEN)
+        return -1;
+
+    pos += n;
 
     // CRLF
-    dst[i++] = '\r';
-    dst[i++] = '\n';
+    pos = setcrlf(dst, pos);
 
     // The query content
-    while (length-- > 0)
-        dst[i++] = src[j++];
+    memcpy(dst + pos, src, length);
+    pos += length;
 
     // CRLF
-    dst[i++] = '\r';
-    dst[i++] = '\n';
+    pos = setcrlf(dst, pos);
 
-    return i;
+    return pos;
 }
 
 ssize_t encode_request(const request_t *r, uint8_t *dst)
 {
-    dst[0] = '$';
-    return 1 + encode_string(dst + 1, r->query, r->length);
+    if (!r || !dst)
+        return -1;
+
+    dst[0]              = MARKER_STRING_SUCCESS;
+
+    ssize_t string_size = encode_string(dst + 1, r->query, r->length);
+    if (string_size < 0)
+        return -1;
+
+    return 1 + string_size;
 }
 
 ssize_t decode_request(const uint8_t *data, request_t *dst)
 {
-    if (data[0] != '$')
+    if (!data || !dst || data[0] != MARKER_STRING_SUCCESS)
         return -1;
 
-    size_t i           = 0;
-    const uint8_t *ptr = &data[1];
+    const uint8_t *ptr  = &data[1];
+    size_t total_length = 1;
+
+    dst->length         = 0;
 
     // Read length
-    while (*ptr != '\r' && *(ptr + 1) != '\n') {
+    while (!iscrlf(ptr)) {
+        // Validate digit
+        if (*ptr < '0' || *ptr > '9')
+            return -1;
+
         dst->length *= 10;
         dst->length += *ptr - '0';
         ptr++;
+        total_length++;
     }
 
+    if (dst->length >= QUERYSIZE)
+        return -1;
+
     // Jump over \r\n
-    ptr += 2;
+    ptr = skipcrlf(ptr);
+    total_length += CRLF_LEN;
+
+    size_t i = 0;
 
     // Read query string
-    while (*ptr != '\r' && *(ptr + 1) != '\n')
-        dst->query[i++] = *ptr++;
+    while (!iscrlf(ptr)) {
+        if (i >= dst->length)
+            return -1;
 
-    return dst->length;
+        dst->query[i++] = *ptr++;
+        total_length++;
+    }
+
+    if (i < QUERYSIZE)
+        dst->query[i] = '\0';
+
+    if (i != dst->length)
+        return -1;
+
+    total_length += CRLF_LEN;
+
+    return total_length;
 }
 
 ssize_t encode_response(const response_t *r, uint8_t *dst)
 {
-    if (r->type == STRING_RSP) {
+    if (!r || !dst)
+        return -1;
+
+    ssize_t pos = 0;
+
+    if (r->type == RT_STRING) {
         // String response
-        dst[0] = r->string_response.rc == 0 ? '$' : '!';
-        return 1 + encode_string(dst + 1, r->string_response.message,
-                                 r->string_response.length);
+        dst[0]              = r->string_response.rc == 0 ? MARKER_STRING_SUCCESS
+                                                         : MARKER_STRING_ERROR;
+        ssize_t string_size = encode_string(dst + 1, r->string_response.message,
+                                            r->string_response.length);
+
+        if (string_size < 0)
+            return -1;
+
+        return 1 + string_size;
     }
+
+    // Check unknown response type
+    if (r->type != RT_ARRAY)
+        return -1;
+
     // Array response
-    dst[0]    = '#';
-    ssize_t i = 1;
-    size_t j  = 0;
+    dst[0]   = MARKER_ARRAY;
+    pos      = 1;
 
     // Array length
-    size_t n  = snprintf((char *)dst + i, 20, "%lu", r->array_response.length);
-    i += n;
+    size_t n = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%zu",
+                        r->array_response.length);
+    if (n < 0 || n >= MAX_NUM_STR_LEN)
+        return -1;
+
+    pos += n;
+
+    if (pos + CRLF_LEN >= QUERYSIZE)
+        return -1;
 
     // CRLF
-    dst[i++] = '\r';
-    dst[i++] = '\n';
+    pos = setcrlf(dst, pos);
 
     // Records
-    while (j < r->array_response.length) {
+    for (size_t j = 0; j < r->array_response.length; ++j) {
+        // Check buffer space
+        if (pos + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+            return -1;
+        }
+
         // Timestamp
-        dst[i++] = ':';
-        n        = snprintf((char *)dst + i, 21, "%" PRIu64,
-                            r->array_response.records[j].timestamp);
-        i += n;
-        dst[i++] = '\r';
-        dst[i++] = '\n';
+        dst[pos++] = MARKER_TIMESTAMP;
+        n          = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%" PRIu64,
+                              r->array_response.records[j].timestamp);
+        if (n < 0 || n >= MAX_NUM_STR_LEN)
+            return -1;
+
+        pos += n;
+
+        pos = setcrlf(dst, pos);
+
+        // Check buffer space again
+        if (pos + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+            return -1;
+        }
+
         // Value
-        dst[i++] = ';';
-        n        = snprintf((char *)dst + i, 21, "%lf",
-                            r->array_response.records[j].value);
-        i += n;
-        dst[i++] = '\r';
-        dst[i++] = '\n';
-        j++;
+        dst[pos++] = MARKER_VALUE;
+        n          = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%lf",
+                              r->array_response.records[j].value);
+        if (n < 0 || n >= MAX_NUM_STR_LEN)
+            return -1;
+
+        pos += n;
+
+        pos = setcrlf(dst, pos);
     }
 
-    return i;
+    return pos;
 }
 
 static ssize_t decode_string(const uint8_t *ptr, response_t *dst)
 {
-    size_t i = 0, n = 1;
+    if (!ptr || !dst)
+        return -1;
 
-    // For simplicty, assume the only error code is 1 for now, it's not used ATM
-    dst->string_response.rc = *ptr == '!' ? 1 : 0;
+    ssize_t total_length = 0;
+
+    if (*ptr == MARKER_STRING_SUCCESS)
+        dst->string_response.rc = 0;
+    else if (*ptr == MARKER_STRING_ERROR)
+        dst->string_response.rc = 1;
+    else
+        return -1;
+
     ptr++;
+    total_length++;
 
-    // Read length
-    while (*ptr != '\r' && *(ptr + 1) != '\n' && n++) {
+    dst->string_response.length = 0;
+
+    while (!iscrlf(ptr)) {
+        // Validate digit
+        if (*ptr < '0' || *ptr > '9')
+            return -1;
+
         dst->string_response.length *= 10;
         dst->string_response.length += *ptr - '0';
         ptr++;
+        total_length++;
     }
 
-    // Move forward after CRLF
-    ptr += 2;
-    n += 2;
+    // Check if we have enough space
+    if (dst->string_response.length >= QUERYSIZE) {
+        return -1;
+    }
 
-    while (*ptr != '\r' && *(ptr + 1) != '\n')
-        dst->string_response.message[i++] = *ptr++;
+    ptr = skipcrlf(ptr);
+    total_length += CRLF_LEN;
 
-    return i + n;
+    size_t i = 0;
+    while (!iscrlf(ptr)) {
+        if (i >= dst->string_response.length)
+            return -1; // Mismatch between declared and actual length
+
+        if (i < QUERYSIZE - 1) { // Leave room for null terminator
+            dst->string_response.message[i++] = *ptr;
+        }
+        ptr++;
+        total_length++;
+    }
+
+    // Null-terminate the message
+    if (i < QUERYSIZE) {
+        dst->string_response.message[i] = '\0';
+    }
+
+    // Check if actual length matches declared length
+    if (i != dst->string_response.length) {
+        return -1;
+    }
+
+    // Account for final CRLF
+    total_length += CRLF_LEN;
+
+    return total_length;
+}
+
+static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
+{
+    ssize_t total_length = 0;
+
+    for (size_t j = 0; j < dst->array_response.length; j++) {
+        // Read timestamp
+        if (*ptr != MARKER_TIMESTAMP)
+            return -1;
+
+        ptr++;
+        total_length++;
+
+        // Parse timestamp
+        char timestamp_str[MAX_NUM_STR_LEN] = {0};
+        size_t ts_pos                       = 0;
+
+        while (!iscrlf(ptr) && ts_pos < MAX_NUM_STR_LEN - 1) {
+            timestamp_str[ts_pos++] = *ptr++;
+            total_length++;
+        }
+
+        if (ts_pos == 0 || ts_pos >= MAX_NUM_STR_LEN - 1)
+            return -1;
+
+        // Convert timestamp
+        timestamp_str[ts_pos] = '\0';
+        char *endptr;
+        dst->array_response.records[j].timestamp =
+            strtoull(timestamp_str, &endptr, 10);
+
+        if (*endptr != '\0')
+            return -1;
+
+        // Skip CRLF
+        ptr = skipcrlf(ptr);
+        total_length += CRLF_LEN;
+
+        // Check for value marker
+        if (*ptr != MARKER_VALUE)
+            return -1;
+
+        ptr++;
+        total_length++;
+
+        // Parse value
+        char value_str[MAX_NUM_STR_LEN] = {0};
+        size_t val_pos                  = 0;
+
+        while (!iscrlf(ptr) && val_pos < MAX_NUM_STR_LEN - 1) {
+            value_str[val_pos++] = *ptr++;
+            total_length++;
+        }
+
+        if (val_pos == 0 || val_pos >= MAX_NUM_STR_LEN - 1)
+            return -1;
+
+        // Convert value
+        value_str[val_pos]                   = '\0';
+        dst->array_response.records[j].value = strtold(value_str, &endptr);
+        if (*endptr != '\0')
+            return -1;
+
+        // Skip CRLF
+        ptr = skipcrlf(ptr);
+        total_length += CRLF_LEN;
+    }
+
+    return total_length;
 }
 
 ssize_t decode_response(const uint8_t *data, response_t *dst)
 {
-    uint8_t byte   = *data;
+    if (!data || !dst)
+        return -1;
+
+    uint8_t marker = *data;
     ssize_t length = 0;
 
-    dst->type      = byte == '#' ? ARRAY_RSP : STRING_RSP;
+    dst->type      = marker == '#' ? RT_ARRAY : RT_STRING;
 
-    switch (byte) {
-    case '$':
-    case '!':
+    switch (marker) {
+    case MARKER_STRING_SUCCESS:
+    case MARKER_STRING_ERROR:
         // Treat error and common strings the same for now
-        length = decode_string(data, dst);
+        dst->type = RT_STRING;
+        length    = decode_string(data, dst);
         break;
-    case '#':
-        data++;
-        length++;
-        // Read length
+    case MARKER_ARRAY:
+        dst->type                  = RT_ARRAY;
+
+        const uint8_t *ptr         = data + 1;
+        ssize_t total_length       = 1; // Account for the # marker
+
+        // Clear array length
         dst->array_response.length = 0;
-        while (*data != '\r' && *(data + 1) != '\n' && length++) {
+
+        // Read array length
+        while (!iscrlf(ptr)) {
+            // Validate digit
+            if (*ptr < '0' || *ptr > '9') {
+                return -1;
+            }
+
             dst->array_response.length *= 10;
-            dst->array_response.length += *data - '0';
-            data++;
+            dst->array_response.length += *ptr - '0';
+            ptr++;
+            total_length++;
         }
 
-        // Jump over \r\n
-        data += 2;
-        length += 2;
+        // Skip CRLF
+        ptr = skipcrlf(ptr);
+        total_length += CRLF_LEN;
 
-        // Read records
-        size_t j             = 0;
-        size_t total_records = dst->array_response.length;
-        uint8_t buf[32];
-        size_t k = 0;
-        // TODO arena malloc here
-        dst->array_response.records =
-            malloc(total_records * sizeof(*dst->array_response.records));
-        while (total_records-- > 0) {
-            // Timestamp
-            if (*data++ != ':')
-                goto cleanup;
-
-            while (*data != '\r' && *(data + 1) != '\n' && length++)
-                buf[k++] = *data++;
-
-            dst->array_response.records[j].timestamp = atoll((const char *)buf);
-            memset(buf, 0x00, sizeof(buf));
-            k = 0;
-
-            // Skip CRLF + ;
-            data += 3;
-            length += 3;
-
-            // Value
-            while (*data != '\r' && *(data + 1) != '\n' && length++)
-                buf[k++] = *data++;
-
-            buf[k]                               = '\0';
-
-            dst->array_response.records[j].value = strtold((char *)buf, NULL);
-
-            // Skip CRLF
-            data += 2;
-            length += 2;
-            j++;
+        // Allocate memory for records
+        if (dst->array_response.length > 0) {
+            dst->array_response.records =
+                malloc(dst->array_response.length * sizeof(response_record_t));
+            if (!dst->array_response.records) {
+                return -1;
+            }
+        } else {
+            dst->array_response.records = NULL;
+            return total_length;
         }
+
+        ssize_t records_count = decode_records(ptr, dst);
+        if (records_count < 0)
+            goto cleanup;
+
+        length = total_length + records_count;
         break;
+
     default:
-        break;
+        return -1;
     }
 
     return length;
@@ -206,8 +408,13 @@ cleanup:
 
 void free_response(response_t *rs)
 {
-    if (rs->type == ARRAY_RSP)
+    if (!rs)
+        return;
+
+    if (rs->type == RT_ARRAY && rs->array_response.records) {
         free(rs->array_response.records);
+        rs->array_response.records = NULL;
+    }
 }
 
 static ssize_t request_vote_rpc_write(uint8_t *buf,

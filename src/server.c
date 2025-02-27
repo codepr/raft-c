@@ -54,7 +54,7 @@ static void execute_create(const stmt_t *stmt, response_t *response)
     timeseries_db_t *tsdb = get_active_db();
     timeseries_t *ts      = NULL;
 
-    response->type        = STRING_RSP;
+    response->type        = RT_STRING;
 
     if (stmt->create.single) {
         // Create database only
@@ -91,7 +91,7 @@ static void execute_create(const stmt_t *stmt, response_t *response)
  */
 static void execute_delete(const stmt_t *stmt, response_t *response)
 {
-    response->type = STRING_RSP;
+    response->type = RT_STRING;
 
     // Currently, deletion is not directly supported in the provided API
     // This would need to be implemented based on your database design
@@ -124,7 +124,7 @@ static void execute_insert(const stmt_t *stmt, response_t *response)
     int success_count     = 0;
     int error_count       = 0;
 
-    response->type        = STRING_RSP;
+    response->type        = RT_STRING;
 
     if (!ts) {
         response->string_response.rc = 1;
@@ -272,7 +272,7 @@ static response_t execute_statement(const stmt_t *stmt)
     response_t rs = {0};
     if (!stmt) {
         // Handle parse error with a string response
-        rs.type               = STRING_RSP;
+        rs.type               = RT_STRING;
         rs.string_response.rc = 1; // Error code
         rs.string_response.length =
             snprintf(rs.string_response.message, QUERYSIZE,
@@ -295,7 +295,7 @@ static response_t execute_statement(const stmt_t *stmt)
         break;
     default:
         // Unknown statement type (should not happen due to earlier check)
-        rs.type               = STRING_RSP;
+        rs.type               = RT_STRING;
         rs.string_response.rc = 1;
         rs.string_response.length =
             snprintf(rs.string_response.message, QUERYSIZE,
@@ -319,7 +319,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
     bytes_read                   = decode_request(buf, &rq);
     if (bytes_read < 0) {
         log_error("Failed to decode client request: %zd", bytes_read);
-        rs.type               = STRING_RSP;
+        rs.type               = RT_STRING;
         rs.string_response.rc = 1;
         strncpy(rs.string_response.message, "Err", 4);
         rs.string_response.length = 4;
@@ -339,7 +339,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
         log_error("Failed to encode response: %zd", bytes_written);
         if (stmt)
             stmt_free(stmt);
-        if (rs.type == ARRAY_RSP)
+        if (rs.type == RT_ARRAY)
             free_response(&rs);
         return -1;
     }
@@ -351,7 +351,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
                   bytes_written);
         if (stmt)
             stmt_free(stmt);
-        if (rs.type == ARRAY_RSP)
+        if (rs.type == RT_ARRAY)
             free_response(&rs);
         return -1;
     }
@@ -359,7 +359,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
     // Clean up
     if (stmt)
         stmt_free(stmt);
-    if (rs.type == ARRAY_RSP)
+    if (rs.type == RT_ARRAY)
         free_response(&rs);
 
 exit:

@@ -7,6 +7,14 @@
 #define TOLERANCE     0.00001
 #define fequals(a, b) fabs((a) - (b)) < TOLERANCE
 
+#define ASSERT_TRUE(condition, msg)                                            \
+    do {                                                                       \
+        if (!(condition)) {                                                    \
+            fprintf(stderr, (msg));                                            \
+            return -1;                                                         \
+        }                                                                      \
+    } while (0)
+
 #define ASSERT_EQ(actual, expected)                                            \
     do {                                                                       \
         if ((actual) != (expected)) {                                          \
