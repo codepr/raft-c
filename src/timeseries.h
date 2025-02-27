@@ -9,10 +9,10 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define TS_NAME_MAX_LENGTH        1 << 9
+#define TS_NAME_MAX_LENGTH        (1 << 9)
 #define TS_CHUNK_SIZE             900 // 15 min
 #define TS_MAX_PARTITIONS         16
-#define DATAPATH_SIZE             1 << 8
+#define DATAPATH_SIZE             (1 << 8)
 
 // Errors
 #define TS_E_UNKNOWN              -1

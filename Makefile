@@ -14,7 +14,8 @@ LDFLAGS = -L. -lraft
 
 RAFT_C_SRC = src/timeutil.c    \
              src/iomux.c       \
-             src/statement.c      \
+             src/statement.c   \
+             src/tsdbmanager.c \
              src/config.c      \
              src/binary.c      \
              src/storage.c     \
@@ -43,7 +44,7 @@ CLI_SRC = src/client.c      \
           src/network.c     \
           src/encoding.c    \
           src/binary.c      \
-          src/statement.c      \
+          src/statement.c   \
           src/timeutil.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 CLI_EXEC = raft-cli

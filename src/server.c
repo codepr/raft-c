@@ -7,6 +7,7 @@
 #include "network.h"
 #include "statement.h"
 #include "timeseries.h"
+#include "tsdbmanager.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -18,121 +19,114 @@
 #include <time.h>
 #include <unistd.h>
 
-#define add_string_response(resp, str, rc)                                     \
+#define set_string_response(resp, rc, fmt, ...)                                \
     do {                                                                       \
-        (resp).type   = STRING_RSP;                                            \
-        size_t length = strlen((str));                                         \
-        memset((resp).string_response.message, 0x00,                           \
-               sizeof((resp).string_response.message));                        \
-        strncpy((resp).string_response.message, (str), length);                \
-        (resp).string_response.length = length;                                \
+        (resp)->type = RT_STRING;                                              \
+        (resp)->string_response.length =                                       \
+            snprintf((resp)->string_response.message, QUERYSIZE,               \
+                     fmt __VA_OPT__(, ) __VA_ARGS__);                          \
     } while (0)
 
-// testing dummy
-static timeseries_db_t *db = NULL;
-
-/**
- * Get the active database instance
- * This is a placeholder function assuming the database handle is stored
- * globally
- */
-static timeseries_db_t *get_active_db(void)
-{
-    // This would need to be implemented based on your application structure
-    // For example, it might be stored in a global variable or passed as context
-    return db;
-}
+#define not_implemented(resp)                                                  \
+    set_string_response((resp), 1, "Error: not supported")
 
 /**
  * Process a CREATE statement and generate appropriate response
  *
- * @param ast The parsed AST node for the CREATE statement
+ * @param stmt The statement representing a CREATE instruction
  * @param response Pointer to response structure to be filled
  */
 static void execute_create(const stmt_t *stmt, response_t *response)
 {
-    timeseries_db_t *tsdb = get_active_db();
+    timeseries_db_t *tsdb = NULL;
     timeseries_t *ts      = NULL;
-
-    response->type        = RT_STRING;
 
     if (stmt->create.single) {
         // Create database only
-        // (Implementation would depend on how database creation is handled)
-        response->string_response.rc     = 0;
-        response->string_response.length = snprintf(
-            response->string_response.message, QUERYSIZE,
-            "Database '%s' created successfully", stmt->create.db_name);
-    } else {
-        // Create timeseries
-        ts = ts_create(tsdb, stmt->create.ts_name, stmt->create.retention,
-                       (duplication_policy_t)stmt->create.duplication);
-
-        if (ts) {
-            response->string_response.rc     = 0;
-            response->string_response.length = snprintf(
-                response->string_response.message, QUERYSIZE,
-                "TimeSeries '%s' created successfully in database '%s'",
-                stmt->create.ts_name, stmt->create.db_name);
-        } else {
-            response->string_response.rc     = 1;
-            response->string_response.length = snprintf(
-                response->string_response.message, QUERYSIZE,
-                "Failed to create TimeSeries '%s'", stmt->create.ts_name);
+        tsdb = tsdbmanager_add(stmt->create.db_name);
+        if (tsdb) {
+            tsdbmanager_setactive(stmt->create.db_name);
+            set_string_response(response, 0,
+                                "Database '%s' created successfully",
+                                stmt->create.db_name);
+            return;
         }
+
+        set_string_response(response, 1, "Failed to create database '%s'",
+                            stmt->create.db_name);
+
+        return;
+    }
+    // Get the specified database or use active database
+    if (stmt->create.db_name[0] != '\0') {
+        tsdb = tsdbmanager_get(stmt->create.db_name);
+        if (!tsdb) {
+            set_string_response(response, 1, "Database '%s' not found",
+                                stmt->create.db_name);
+
+            return;
+        }
+    }
+
+    tsdb = tsdbmanager_getactive();
+    if (!tsdb) {
+        set_string_response(response, 1, "No active database");
+
+        return;
+    }
+
+    // Create timeseries
+    ts = ts_create(tsdb, stmt->create.ts_name, stmt->create.retention,
+                   (duplication_policy_t)stmt->create.duplication);
+
+    if (ts) {
+        set_string_response(
+            response, 0,
+            "TimeSeries '%s' created successfully in database '%s'",
+            stmt->create.ts_name, stmt->create.db_name);
+    } else {
+        set_string_response(response, 1, "Failed to create TimeSeries '%s'",
+                            stmt->create.ts_name);
     }
 }
 
 /**
  * Process a DELETE statement and generate appropriate response
  *
- * @param ast The parsed AST node for the DELETE statement
+ * @param stmt The statement representing a DELETE instruction
  * @param response Pointer to response structure to be filled
  */
 static void execute_delete(const stmt_t *stmt, response_t *response)
 {
-    response->type = RT_STRING;
-
     // Currently, deletion is not directly supported in the provided API
-    // This would need to be implemented based on your database design
-    if (stmt->delete.single) {
-        // Delete entire database (not implemented in the provided headers)
-        response->string_response.rc = 1;
-        response->string_response.length =
-            snprintf(response->string_response.message, QUERYSIZE,
-                     "Error: Database deletion not supported");
-    } else {
-        // Delete a time series (not implemented in the provided headers)
-        // You would need to add a ts_delete function to your API
-        response->string_response.rc = 1;
-        response->string_response.length =
-            snprintf(response->string_response.message, QUERYSIZE,
-                     "Error: TimeSeries deletion not supported");
-    }
+    not_implemented(response);
 }
 
 /**
  * Process an INSERT statement and generate appropriate response
  *
- * @param ast The parsed AST node for the INSERT statement
+ * @param stmt The statement representing an INSERT instruction
  * @param response Pointer to response structure to be filled
  */
 static void execute_insert(const stmt_t *stmt, response_t *response)
 {
-    timeseries_db_t *tsdb = get_active_db();
-    timeseries_t *ts      = ts_get(tsdb, stmt->insert.ts_name);
-    int success_count     = 0;
-    int error_count       = 0;
-
-    response->type        = RT_STRING;
-
-    if (!ts) {
-        response->string_response.rc = 1;
-        response->string_response.length =
-            snprintf(response->string_response.message, QUERYSIZE,
-                     "Error: TimeSeries '%s' not found", stmt->insert.ts_name);
+    // Active database not supported yet
+    timeseries_db_t *tsdb = tsdbmanager_get(stmt->insert.db_name);
+    if (!tsdb) {
+        set_string_response(response, 1, "Database '%s' not found",
+                            stmt->create.db_name);
         return;
     }
+
+    timeseries_t *ts = ts_get(tsdb, stmt->insert.ts_name);
+    if (!ts) {
+        set_string_response(response, 1, "Timeseries '%s' not found",
+                            stmt->create.ts_name);
+        return;
+    }
+
+    int success_count = 0;
+    int error_count   = 0;
 
     // Insert each record
     for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
@@ -148,28 +142,25 @@ static void execute_insert(const stmt_t *stmt, response_t *response)
 
     // Set response based on insertion results
     if (error_count == 0) {
-        response->string_response.rc = 0;
-        response->string_response.length =
-            snprintf(response->string_response.message, QUERYSIZE,
-                     "Successfully inserted %d points", success_count);
+        set_string_response(response, 0, "Successfully inserted %d points",
+                            success_count);
     } else {
-        response->string_response.rc     = 1;
-        response->string_response.length = snprintf(
-            response->string_response.message, QUERYSIZE,
-            "Inserted %d points with %d errors", success_count, error_count);
+        set_string_response(response, 1, "Inserted %d points with %d errors",
+                            success_count, error_count);
     }
 }
 
 /**
  * Process a SELECT statement and generate appropriate response
  *
- * @param ast The parsed AST node for the SELECT statement
+ * @param stmt The statemenet representing a SELECT instruction
  * @param response Pointer to response structure to be filled
  */
-static void execute_select(const stmt_t *ast, response_t *response)
+static void execute_select(const stmt_t *stmt, response_t *response)
 {
-    // timeseries_db_t *tsdb  = get_active_db();
-    // timeseries_t *ts       = ts_get(tsdb, ast->select.ts_name);
+    not_implemented(response);
+    // timeseries_db_t *tsdb  = tsdbmanager_getactive();
+    // timeseries_t *ts       = ts_get(tsdb, stmt->select.ts_name);
     // record_array_t records = {0};
     //
     // if (!ts) {
@@ -178,15 +169,15 @@ static void execute_select(const stmt_t *ast, response_t *response)
     //     response->string_response.length =
     //         snprintf(response->string_response.message, QUERYSIZE,
     //                  "Error: TimeSeries '%s' not found",
-    //                  ast->select.ts_name);
+    //                  stmt->select.ts_name);
     //     return;
     // }
 
     // Query data based on select mask
-    // if (ast->select.mask & SM_SINGLE) {
+    // if (stmt->select.mask & SM_SINGLE) {
     //     // Single point query
     //     record_t record;
-    //     if (ts_find(ts, ast->select.start_time, &record) == 0) {
+    //     if (ts_find(ts, stmt->select.start_time, &record) == 0) {
     //         // Prepare array response with single record
     //         response->type                  = ARRAY_RSP;
     //         response->array_response.length = 1;
@@ -208,12 +199,12 @@ static void execute_select(const stmt_t *ast, response_t *response)
     //         response->string_response.length =
     //             snprintf(response->string_response.message, QUERYSIZE,
     //                      "Error: Point not found at timestamp %" PRIu64,
-    //                      ast->select.start_time);
+    //                      stmt->select.start_time);
     //     }
-    // } else if (ast->select.mask & SM_RANGE) {
+    // } else if (stmt->select.mask & SM_RANGE) {
     //     // Range query
-    //     int result = ts_range(ts, ast->select.start_time,
-    //     ast->select.end_time,
+    //     int result = ts_range(ts, stmt->select.start_time,
+    //     stmt->select.end_time,
     //                           &records);
     //
     //     if (result == 0 && records.length > 0) {
@@ -248,13 +239,13 @@ static void execute_select(const stmt_t *ast, response_t *response)
     //             response->string_response.length = snprintf(
     //                 response->string_response.message, QUERYSIZE,
     //                 "Error: Failed to query range [%" PRIu64 ", %" PRIu64
-    //                 "]", ast->select.start_time, ast->select.end_time);
+    //                 "]", stmt->select.start_time, stmt->select.end_time);
     //         } else {
     //             response->string_response.rc     = 0;
     //             response->string_response.length = snprintf(
     //                 response->string_response.message, QUERYSIZE,
     //                 "No data found in range [%" PRIu64 ", %" PRIu64 "]",
-    //                 ast->select.start_time, ast->select.end_time);
+    //                 stmt->select.start_time, stmt->select.end_time);
     //         }
     //     }
     // } else {

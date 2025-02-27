@@ -40,7 +40,7 @@ typedef struct {
     char message[QUERYSIZE];
 } string_response_t;
 
-typedef struct record {
+typedef struct response_record {
     uint64_t timestamp;
     double_t value;
 } response_record_t;
