@@ -1,28 +1,58 @@
 #include "statement.h"
 #include "darray.h"
+#include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
-string_view_t string_view_from_parts(const char *src, size_t len)
+string_view_t sv_from_parts(const char *src, size_t len)
 {
     string_view_t view = {.length = len, .p = src};
     return view;
 }
 
-string_view_t string_view_from_cstring(const char *src)
+string_view_t sv_from_cstring(const char *src)
 {
-    return string_view_from_parts(src, strlen(src));
+    return sv_from_parts(src, strlen(src));
 }
 
-string_view_t string_view_chop_by_delim(string_view_t *view, const char delim)
+// Skip whitespace in a string view
+void sv_trim_left(string_view_t *view)
+{
+    size_t i = 0;
+    while (i < view->length && isspace(view->p[i])) {
+        i += 1;
+    }
+
+    view->p += i;
+    view->length -= i;
+}
+
+// Case-insensitive comparison of string view with C string
+bool sv_equals_cstr_ignorecase(string_view_t sv, const char *cstr)
+{
+    size_t cstr_len = strlen(cstr);
+    if (sv.length != cstr_len)
+        return false;
+
+    for (size_t i = 0; i < sv.length; i++) {
+        if (toupper(sv.p[i]) != toupper(cstr[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+string_view_t sv_chop_by_delim(string_view_t *view, char delim)
 {
     size_t i = 0;
     while (i < view->length && view->p[i] != delim) {
         i += 1;
     }
 
-    string_view_t result = string_view_from_parts(view->p, i);
+    string_view_t result = sv_from_parts(view->p, i);
 
     if (i < view->length) {
         view->length -= i + 1;
@@ -44,40 +74,44 @@ typedef struct {
     size_t length;
 } lexer_t;
 
-// Function to get the next token from the lexer
-static string_view_t lexer_next(lexer_t *l)
-{
-    string_view_t lexiom = string_view_chop_by_delim(&l->view, ' ');
-    l->length            = l->view.length;
-    return lexiom;
-}
-
 // Define token types
 typedef enum {
+    TOKEN_USE,
     TOKEN_META,
+    TOKEN_VALUE,
+    TOKEN_VALUES,
+    TOKEN_SAMPLE,
     TOKEN_CREATE,
+    TOKEN_CREATEDB,
     TOKEN_INSERT,
+    TOKEN_LIMIT,
     TOKEN_INTO,
     TOKEN_NUMBER,
+    TOKEN_TIMEUNIT,
     TOKEN_IDENTIFIER,
     TOKEN_SELECT,
     TOKEN_DELETE,
     TOKEN_FROM,
     TOKEN_AND,
-    TOKEN_RANGE,
-    TOKEN_TO,
+    TOKEN_BETWEEN,
     TOKEN_WHERE,
     TOKEN_WILDCARD,
+    TOKEN_LPAREN,
+    TOKEN_RPAREN,
+    TOKEN_COMMA,
+    TOKEN_ERROR,
     TOKEN_OPERATOR_EQ,
     TOKEN_OPERATOR_NE,
     TOKEN_OPERATOR_LE,
     TOKEN_OPERATOR_LT,
     TOKEN_OPERATOR_GE,
     TOKEN_OPERATOR_GT,
-    TOKEN_AGGREGATE_AVG,
-    TOKEN_AGGREGATE_MIN,
-    TOKEN_AGGREGATE_MAX,
-    TOKEN_AGGREGATE,
+    TOKEN_LITERAL,
+    TOKEN_FUNC_MIN,
+    TOKEN_FUNC_MAX,
+    TOKEN_FUNC_AVG,
+    TOKEN_FUNC_NOW,
+    TOKEN_FUNC_LATEST,
     TOKEN_BY,
     TOKEN_EOF
 } token_type_t;
@@ -94,120 +128,301 @@ typedef struct token_array {
     token_t *items;
 } token_array_t;
 
-static int tokenize_next(lexer_t *l, token_t *t)
+static bool match_separator(string_view_t *source, token_t *token)
 {
-    if (l->length == 0) {
-        t->type     = TOKEN_EOF;
-        t->value[0] = EOF;
-        return EOF;
+    // Check for single-character tokens
+    switch (*source->p) {
+    case '(':
+        token->type = TOKEN_LPAREN;
+        break;
+    case ')':
+        token->type = TOKEN_RPAREN;
+        break;
+    case ',':
+        token->type = TOKEN_COMMA;
+        break;
+    default:
+        return false;
     }
 
-    string_view_t token = lexer_next(l);
-    size_t length       = 0;
-
-    // Main commands
-
-    if (strncasecmp(token.p, ".databases", 10) == 0) {
-        length  = 10;
-        t->type = TOKEN_META;
-    } else if (strncasecmp(token.p, ".timeseries", 11) == 0) {
-        length  = 11;
-        t->type = TOKEN_META;
-    } else if (strncasecmp(token.p, "CREATE", 6) == 0) {
-        length  = 6;
-        t->type = TOKEN_CREATE;
-    } else if (strncasecmp(token.p, "INSERT", 6) == 0) {
-        length  = 6;
-        t->type = TOKEN_INSERT;
-    } else if (strncasecmp(token.p, "SELECT", 6) == 0) {
-        length  = 6;
-        t->type = TOKEN_SELECT;
-    } else if (strncasecmp(token.p, "DELETE", 6) == 0) {
-        length  = 6;
-        t->type = TOKEN_DELETE;
-    } else if (strncasecmp(token.p, "WHERE", 5) == 0) {
-        length  = 5;
-        t->type = TOKEN_WHERE;
-    } else if (strncasecmp(token.p, "INTO", 4) == 0) {
-        length  = 4;
-        t->type = TOKEN_INTO;
-    } else if (strncasecmp(token.p, "FROM", 4) == 0) {
-        length  = 4;
-        t->type = TOKEN_FROM;
-    } else if (strncasecmp(token.p, "RANGE", 5) == 0) {
-        length  = 4;
-        t->type = TOKEN_RANGE;
-    } else if (strncasecmp(token.p, "AND", 3) == 0) {
-        length  = 3;
-        t->type = TOKEN_AND;
-    } else if (strncasecmp(token.p, "TO", 2) == 0) {
-        length  = 2;
-        t->type = TOKEN_TO;
-    } else if (strncasecmp(token.p, "BY", 2) == 0) {
-        length  = 2;
-        t->type = TOKEN_BY;
-    } else if (strncasecmp(token.p, "AGGREGATE", 9) == 0) {
-        length  = 9;
-        t->type = TOKEN_AGGREGATE;
-    } else if (strncasecmp(token.p, "AVG", 3) == 0) {
-        length  = 3;
-        t->type = TOKEN_AGGREGATE_AVG;
-    } else if (strncasecmp(token.p, "MIN", 3) == 0) {
-        length  = 3;
-        t->type = TOKEN_AGGREGATE_MIN;
-    } else if (strncasecmp(token.p, "MAX", 3) == 0) {
-        length  = 3;
-        t->type = TOKEN_AGGREGATE_MAX;
-    } else if (strncasecmp(token.p, "<=", 2) == 0) {
-        length  = 2;
-        t->type = TOKEN_OPERATOR_LE;
-    } else if (strncasecmp(token.p, ">=", 2) == 0) {
-        length  = 2;
-        t->type = TOKEN_OPERATOR_GE;
-    } else if (strncasecmp(token.p, "!=", 2) == 0) {
-        length  = 2;
-        t->type = TOKEN_OPERATOR_NE;
-    } else if (strncasecmp(token.p, "<", 1) == 0) {
-        length  = 1;
-        t->type = TOKEN_OPERATOR_LT;
-    } else if (strncasecmp(token.p, ">", 1) == 0) {
-        length  = 1;
-        t->type = TOKEN_OPERATOR_GT;
-    } else if (*token.p == '*' && token.length == 1) {
-        length  = 1;
-        t->type = TOKEN_WILDCARD;
-    } else if (sscanf(token.p, "%" PRIu64, &(uint64_t){0}) == 1) {
-        length  = token.length;
-        t->type = TOKEN_NUMBER;
-    } else if (sscanf(token.p, "%lf", &(double_t){0.0f}) == 1) {
-        length  = token.length;
-        t->type = TOKEN_NUMBER;
-    } else {
-        length  = token.length;
-        t->type = TOKEN_IDENTIFIER;
-    }
-
-    strncpy(t->value, token.p, length);
-
-    return 1;
+    *token->value = *source->p;
+    source->p += 1;
+    source->length -= 1;
+    return true;
 }
 
-static ssize_t tokenize(const char *query, token_array_t *token_array)
+static bool match_literal(string_view_t *source, token_t *token)
 {
-    string_view_t view = string_view_from_cstring(query);
-    lexer_t l          = {.view = view, .length = view.length};
-    token_t token      = {0};
+    if (*source->p != '\'')
+        return false;
 
-    while (tokenize_next(&l, &token) != EOF) {
-        da_append(token_array, token);
-        memset(&token, 0x00, sizeof(token));
+    size_t i = 1; // Skip opening quote
+    while (i < source->length && source->p[i] != '\'') {
+        i++;
     }
 
-    token.type     = EOF;
-    token.value[0] = EOF;
-    da_append(token_array, token);
+    if (i >= source->length) {
+        // Unterminated string
+        token->type = TOKEN_ERROR;
+        return false;
+    }
 
-    return token_array->length;
+    // Include content without quotes
+    token->type = TOKEN_LITERAL;
+    strncpy(token->value, source->p + 1, i - 1);
+
+    // Skip past the closing quote
+    source->p += i + 1;
+    source->length -= i + 1;
+    return true;
+}
+
+static bool match_number(string_view_t *source, token_t *token)
+{
+    if (isdigit(*source->p) ||
+        (*source->p == '.' && source->length > 1 && isdigit(*source->p + 1))) {
+
+        size_t i = 0;
+
+        // Process integer part
+        while (i < source->length && isdigit(source->p[i])) {
+            i++;
+        }
+
+        // Process decimal point and fractional part
+        if (i < source->length && source->p[i] == '.') {
+            i++; // Skip the decimal point
+
+            // Process digits after decimal point
+            while (i < source->length && isdigit(source->p[i])) {
+                i++;
+            }
+        }
+
+        // Process exponent part (e.g., 1.23e-4)
+        if (i < source->length &&
+            (source->p[i] == 'e' || source->p[i] == 'E')) {
+            i++; // Skip the 'e' or 'E'
+
+            // Optional sign for exponent
+            if (i < source->length &&
+                (source->p[i] == '+' || source->p[i] == '-')) {
+                i++;
+            }
+
+            // Must have at least one digit after exponent
+            if (i >= source->length || !isdigit(source->p[i])) {
+                // Invalid number format
+                token->type = TOKEN_ERROR;
+                strncpy(token->value, source->p, i);
+                source->p += i;
+                source->length -= i;
+                return false;
+            }
+
+            // Process digits in exponent
+            while (i < source->length && isdigit(source->p[i])) {
+                i++;
+            }
+        }
+
+        token->type = TOKEN_NUMBER;
+        strncpy(token->value, source->p, i);
+
+        source->p += i;
+        source->length -= i;
+
+        return true;
+    }
+
+    return false;
+}
+
+static bool match_timeunit(string_view_t *source, token_t *token)
+{
+    if (!isdigit(source->p[0]))
+        return false;
+
+    size_t i = 0;
+    while (i < source->length && isdigit(source->p[i])) {
+        i++;
+    }
+
+    if (source->p[i] != 'd' && source->p[i] != 'h' && source->p[i] != 'm' &&
+        source->p[i] != 's')
+        return false;
+
+    size_t unit_len = 1;
+    // Special case for "ms"
+    if (source->length > 1 && source->p[i] == 'm' && source->p[i + 1] == 's') {
+        unit_len = 2;
+    }
+
+    token->type = TOKEN_TIMEUNIT;
+    strncpy(token->value, source->p, unit_len + i);
+
+    source->p += unit_len + i;
+    source->length -= unit_len + i;
+
+    return true;
+}
+
+// Check if a char is a valid identifier character
+bool is_identifier_char(char c) { return !isspace(c) && c != '(' && c != ')'; }
+
+static bool match_keyword(string_view_t *source, token_t *token)
+{
+    size_t i = 0;
+    while (i < source->length && is_identifier_char(source->p[i])) {
+        i++;
+    }
+
+    string_view_t value = sv_from_parts(source->p, i);
+
+    // Check for keywords
+    if (sv_equals_cstr_ignorecase(value, "USE")) {
+        token->type = TOKEN_USE;
+    } else if (sv_equals_cstr_ignorecase(value, "CREATEDB")) {
+        token->type = TOKEN_CREATEDB;
+    } else if (sv_equals_cstr_ignorecase(value, "DELETE")) {
+        token->type = TOKEN_DELETE;
+    } else if (sv_equals_cstr_ignorecase(value, "CREATE")) {
+        token->type = TOKEN_CREATE;
+    } else if (sv_equals_cstr_ignorecase(value, "INSERT")) {
+        token->type = TOKEN_INSERT;
+    } else if (sv_equals_cstr_ignorecase(value, "SELECT")) {
+        token->type = TOKEN_SELECT;
+    } else if (sv_equals_cstr_ignorecase(value, "FROM")) {
+        token->type = TOKEN_FROM;
+    } else if (sv_equals_cstr_ignorecase(value, "INTO")) {
+        token->type = TOKEN_INTO;
+    } else if (sv_equals_cstr_ignorecase(value, "WHERE")) {
+        token->type = TOKEN_WHERE;
+    } else if (sv_equals_cstr_ignorecase(value, "BETWEEN")) {
+        token->type = TOKEN_BETWEEN;
+    } else if (sv_equals_cstr_ignorecase(value, "AND")) {
+        token->type = TOKEN_AND;
+    } else if (sv_equals_cstr_ignorecase(value, "SAMPLE")) {
+        token->type = TOKEN_SAMPLE;
+    } else if (sv_equals_cstr_ignorecase(value, "BY")) {
+        token->type = TOKEN_BY;
+    } else if (sv_equals_cstr_ignorecase(value, "LIMIT")) {
+        token->type = TOKEN_LIMIT;
+    } else if (sv_equals_cstr_ignorecase(value, "VALUE")) {
+        token->type = TOKEN_VALUE;
+    } else if (sv_equals_cstr_ignorecase(value, "VALUES")) {
+        token->type = TOKEN_VALUES;
+    } else if (sv_equals_cstr_ignorecase(value, ".databases") ||
+               sv_equals_cstr_ignorecase(value, ".timeseries")) {
+        token->type = TOKEN_META;
+    } else if (sv_equals_cstr_ignorecase(value, ">")) {
+        token->type = TOKEN_OPERATOR_GT;
+    } else if (sv_equals_cstr_ignorecase(value, "<")) {
+        token->type = TOKEN_OPERATOR_LT;
+    } else if (sv_equals_cstr_ignorecase(value, "=")) {
+        token->type = TOKEN_OPERATOR_EQ;
+    } else if (sv_equals_cstr_ignorecase(value, ">=")) {
+        token->type = TOKEN_OPERATOR_GE;
+    } else if (sv_equals_cstr_ignorecase(value, "<=")) {
+        token->type = TOKEN_OPERATOR_LE;
+    } else if (sv_equals_cstr_ignorecase(value, "!=")) {
+        token->type = TOKEN_OPERATOR_NE;
+    } else {
+        return false;
+    }
+
+    strncpy(token->value, value.p, value.length);
+
+    source->p += i;
+    source->length -= i;
+
+    return true;
+}
+
+static bool match_function(string_view_t *source, token_t *token)
+{
+    if (sv_equals_cstr_ignorecase(*source, "min")) {
+        token->type = TOKEN_FUNC_MIN;
+    } else if (sv_equals_cstr_ignorecase(*source, "max")) {
+        token->type = TOKEN_FUNC_MAX;
+    } else if (sv_equals_cstr_ignorecase(*source, "avg")) {
+        token->type = TOKEN_FUNC_AVG;
+    } else if (sv_equals_cstr_ignorecase(*source, "avg")) {
+        token->type = TOKEN_FUNC_AVG;
+    } else if (sv_equals_cstr_ignorecase(*source, "now")) {
+        token->type = TOKEN_FUNC_NOW;
+    } else if (sv_equals_cstr_ignorecase(*source, "latest")) {
+        token->type = TOKEN_FUNC_LATEST;
+    } else {
+        token->type = TOKEN_ERROR;
+        return false;
+    }
+    return true;
+}
+
+static bool match_identifier(string_view_t *source, token_t *token)
+{
+    size_t i = 0;
+    while (i < source->length && is_identifier_char(source->p[i])) {
+        i++;
+    }
+
+    string_view_t value     = sv_from_parts(source->p, i);
+
+    // It's an identifier - check if it's followed by a parenthesis
+    string_view_t remaining = *source;
+    remaining.p += i;
+    remaining.length -= i;
+
+    sv_trim_left(&remaining);
+
+    if (remaining.length > 0 && remaining.p[0] == '(') {
+        if (!match_function(&value, token))
+            return false;
+    } else {
+        token->type = TOKEN_IDENTIFIER;
+    }
+
+    strncpy(token->value, value.p, value.length);
+
+    source->p += i;
+    source->length -= i;
+
+    return true;
+}
+
+// Get next token from string view
+token_t tokenize_next(string_view_t *source)
+{
+    token_t token = {0};
+
+    // Skip leading whitespace
+    sv_trim_left(source);
+
+    // Check for EOF
+    if (source->length == 0) {
+        token.type = TOKEN_EOF;
+        return token;
+    }
+
+    // Check in order for
+    // - single-character tokens
+    // - string literals
+    // - timeunits
+    // - numbers
+    // - identifiers or keywords
+    if (match_separator(source, &token) || match_literal(source, &token) ||
+        match_timeunit(source, &token) || match_number(source, &token) ||
+        match_keyword(source, &token) || match_identifier(source, &token))
+        return token;
+
+    // If we reach here, it's an unexpected character
+    token.type   = TOKEN_ERROR;
+    *token.value = *source->p;
+    source->p += 1;
+    source->length -= 1;
+
+    return token;
 }
 
 // Helper function to safely copy identifiers
@@ -219,6 +434,25 @@ static void copy_identifier(char *dest, const char *src)
     }
     strncpy(dest, src, len);
     dest[len] = '\0';
+}
+
+static ssize_t tokenize(const char *query, token_array_t *token_array)
+{
+    string_view_t view = sv_from_cstring(query);
+    lexer_t l          = {.view = view, .length = view.length};
+    token_t token      = {0};
+
+    do {
+        memset(&token, 0x00, sizeof(token));
+        token = tokenize_next(&l.view);
+        da_append(token_array, token);
+    } while (token.type != TOKEN_EOF && token.type != TOKEN_ERROR);
+
+    token.type     = EOF;
+    token.value[0] = EOF;
+    da_append(token_array, token);
+
+    return token_array->length;
 }
 
 typedef struct {
@@ -239,6 +473,33 @@ static int expect(parser_t *p, token_type_t type)
     p->pos++;
 
     return 0;
+}
+
+static int expect_timeunit(parser_t *p, stmt_timeunit_t *tu)
+{
+    if (expect(p, TOKEN_TIMEUNIT) < 0)
+        return -1;
+    char *timeunit = p->tokens[p->pos - 1].value;
+    char *endptr;
+    errno              = 0;
+
+    tu->interval.value = strtoll(timeunit, &endptr, 10);
+    if (errno != 0)
+        return -1;
+
+    char *ptr = &tu->interval.unit[0];
+
+    for (; isalpha(*endptr) && is_identifier_char(*endptr); *ptr++ = *endptr++)
+        ;
+
+    return 0;
+}
+
+static char *expect_literal(parser_t *p)
+{
+    if (expect(p, TOKEN_LITERAL) < 0)
+        return NULL;
+    return p->tokens[p->pos - 1].value;
 }
 
 static char *expect_identifier(parser_t *p)
@@ -292,19 +553,26 @@ static int expect_operator(parser_t *p)
     return op;
 }
 
-static int expect_aggregatefn(parser_t *p)
+static int expect_function(parser_t *p)
 {
-    token_t *t        = parser_peek(p);
-    aggregate_fn_t fn = AGG_AVG;
+    token_t *t    = parser_peek(p);
+    function_t fn = FN_NONE;
 
     switch (t->type) {
-    case TOKEN_AGGREGATE_AVG:
+    case TOKEN_FUNC_AVG:
+        fn = FN_AVG;
         break;
-    case TOKEN_AGGREGATE_MAX:
-        fn = AGG_MAX;
+    case TOKEN_FUNC_MAX:
+        fn = FN_MAX;
         break;
-    case TOKEN_AGGREGATE_MIN:
-        fn = AGG_MIN;
+    case TOKEN_FUNC_MIN:
+        fn = FN_MIN;
+        break;
+    case TOKEN_FUNC_NOW:
+        fn = FN_NOW;
+        break;
+    case TOKEN_FUNC_LATEST:
+        fn = FN_LATEST;
         break;
     default:
         fprintf(stderr, "Unexpected aggregate fn token: %s at %zu\n",
@@ -425,15 +693,61 @@ err:
     return NULL;
 }
 
+static stmt_t *parse_use(parser_t *p)
+{
+    stmt_t *node = calloc(1, sizeof(*node));
+    if (!node)
+        return NULL;
+
+    node->type = STMT_USE;
+
+    if (expect(p, TOKEN_USE) < 0)
+        goto err;
+
+    char *tsname = expect_identifier(p);
+    if (!tsname)
+        goto err;
+
+    copy_identifier(node->use.db_name, tsname);
+
+    return node;
+
+err:
+    free(node);
+    return NULL;
+}
+
+static stmt_t *parse_createdb(parser_t *p)
+{
+    stmt_t *node = calloc(1, sizeof(*node));
+    if (!node)
+        return NULL;
+
+    node->type = STMT_CREATEDB;
+
+    if (expect(p, TOKEN_CREATEDB) < 0)
+        goto err;
+
+    char *tsname = expect_identifier(p);
+    if (!tsname)
+        goto err;
+
+    copy_identifier(node->create.db_name, tsname);
+
+    return node;
+
+err:
+    free(node);
+    return NULL;
+}
+
 static stmt_t *parse_create(parser_t *p)
 {
     stmt_t *node = calloc(1, sizeof(*node));
     if (!node)
         return NULL;
 
-    node->type                     = STMT_CREATE;
-    node->create.single            = 1;
-    char tsname[IDENTIFIER_LENGTH] = {0};
+    node->type = STMT_CREATE;
 
     if (expect(p, TOKEN_CREATE) < 0)
         goto err;
@@ -442,28 +756,35 @@ static stmt_t *parse_create(parser_t *p)
     if (!tsid)
         goto err;
 
-    copy_identifier(tsname, tsid);
+    copy_identifier(node->create.ts_name, tsid);
 
-    if (parser_peek(p)->type == TOKEN_INTO) {
-        node->create.single = 0;
-        if (expect(p, TOKEN_INTO) < 0)
+    if (parser_peek(p)->type == TOKEN_EOF)
+        return node;
+
+    // Optional retention + duplication policy integers
+
+    if (parser_peek(p)->type == TOKEN_TIMEUNIT) {
+        if (expect_timeunit(p, &node->create.retention) < 0)
             goto err;
 
-        char *dbname = expect_identifier(p);
-        if (!dbname)
+        node->create.retention.type = TU_INTERVAL;
+        node->create.has_retention  = true;
+    } else if (parser_peek(p)->type == TOKEN_NUMBER) {
+        node->create.has_retention = true;
+        if (expect_integer(p, (int64_t *)&node->create.retention) < 0)
             goto err;
 
-        copy_identifier(node->create.db_name, dbname);
-        copy_identifier(node->create.ts_name, tsname);
+        node->create.retention.type = TU_SINGLE;
+        node->create.has_retention  = true;
+    }
 
-        if (parser_peek(p)->type == TOKEN_NUMBER &&
-            expect_integer(p, (int64_t *)&node->create.retention) < 0)
+    if (parser_peek(p)->type == TOKEN_LITERAL) {
+        char *duplication = expect_literal(p);
+        if (!duplication)
             goto err;
-        if (parser_peek(p)->type == TOKEN_NUMBER &&
-            expect_integer(p, (int64_t *)&node->create.duplication) < 0)
-            goto err;
-    } else {
-        copy_identifier(node->create.db_name, tsname);
+
+        copy_identifier(node->create.duplication, duplication);
+        node->create.has_duplication = true;
     }
 
     return node;
@@ -526,32 +847,53 @@ static stmt_t *parse_insert(parser_t *p)
     if (expect(p, TOKEN_INSERT) < 0)
         goto err;
 
+    if (expect(p, TOKEN_INTO) < 0)
+        goto err;
+
     char *tsname = expect_identifier(p);
     if (!tsname)
         goto err;
 
     copy_identifier(node->insert.ts_name, tsname);
 
-    if (expect(p, TOKEN_INTO) < 0)
-        goto err;
+    if (parser_peek(p)->type == TOKEN_VALUE) {
 
-    char *dbname = expect_identifier(p);
-    if (!dbname)
-        goto err;
+        if (expect(p, TOKEN_VALUE) < 0)
+            goto err;
 
-    copy_identifier(node->insert.db_name, dbname);
-
-    stmt_record_t record = {0};
-    while (parser_peek(p)->type == TOKEN_WILDCARD ||
-           parser_peek(p)->type == TOKEN_NUMBER) {
-
-        if (expect_integer(p, &record.timestamp) < 0 ||
-            expect_float(p, &record.value) < 0)
+        stmt_record_t record = {0};
+        record.timestamp     = current_micros();
+        if (expect_float(p, &record.value) < 0)
             goto err;
         da_append(&node->insert.record_array, record);
+        return node;
     }
 
-    return node;
+    if (parser_peek(p)->type == TOKEN_VALUES) {
+
+        if (expect(p, TOKEN_VALUES) < 0)
+            goto err;
+
+        stmt_record_t record = {0};
+        do {
+            if (expect(p, TOKEN_LPAREN) < 0)
+                goto err;
+            if (expect_integer(p, &record.timestamp) < 0)
+                goto err;
+            if (expect(p, TOKEN_COMMA) < 0)
+                goto err;
+            if (expect_float(p, &record.value) < 0)
+                goto err;
+
+            da_append(&node->insert.record_array, record);
+
+            if (expect(p, TOKEN_RPAREN) < 0)
+                goto err;
+        } while (parser_peek(p)->type == TOKEN_COMMA &&
+                 expect(p, TOKEN_COMMA) == 0);
+
+        return node;
+    }
 
 err:
     da_free(&node->insert.record_array);
@@ -565,12 +907,31 @@ static stmt_t *parse_select(parser_t *p)
     if (!node)
         return NULL;
 
-    node->type              = STMT_SELECT;
-    node->select.flags      = QF_BASIC;
-    node->select.start_time = -1;
-    node->select.end_time   = -1;
+    node->type         = STMT_SELECT;
+    node->select.flags = QF_BASE;
 
     if (expect(p, TOKEN_SELECT) < 0)
+        goto err;
+
+    if (parser_peek(p)->type >= TOKEN_FUNC_MIN &&
+        parser_peek(p)->type <= TOKEN_FUNC_LATEST) {
+        node->select.function = expect_function(p);
+        // TODO skip for now
+        if (expect(p, TOKEN_LPAREN) < 0)
+            goto err;
+        if (expect(p, TOKEN_IDENTIFIER) < 0)
+            goto err;
+        if (expect(p, TOKEN_RPAREN) < 0)
+            goto err;
+
+        node->select.flags |= QF_FUNC;
+    } else {
+        // TODO skip for now
+        if (expect(p, TOKEN_IDENTIFIER) < 0)
+            goto err;
+    }
+
+    if (expect(p, TOKEN_FROM) < 0)
         goto err;
 
     char *tsname = expect_identifier(p);
@@ -579,55 +940,70 @@ static stmt_t *parse_select(parser_t *p)
 
     copy_identifier(node->select.ts_name, tsname);
 
-    if (expect(p, TOKEN_FROM) < 0)
-        goto err;
+    if (parser_peek(p)->type == TOKEN_BETWEEN) {
+        if (expect(p, TOKEN_BETWEEN) < 0)
+            goto err;
+        if (parser_peek(p)->type == TOKEN_NUMBER) {
+            node->select.timeunit.type = TU_TSINTERVAL;
+            if (expect_integer(p, &node->select.timeunit.tsinterval.start) < 0)
+                goto err;
+            if (expect(p, TOKEN_AND) < 0)
+                goto err;
+            if (expect_integer(p, &node->select.timeunit.tsinterval.end) < 0)
+                goto err;
+        } else if (parser_peek(p)->type == TOKEN_LITERAL) {
+            node->select.timeunit.type = TU_DATEINTERVAL;
 
-    char *dbname = expect_identifier(p);
-    if (!dbname)
-        goto err;
+            char *startdate            = expect_literal(p);
+            if (!startdate)
+                goto err;
 
-    copy_identifier(node->select.db_name, dbname);
+            copy_identifier(node->select.timeunit.dateinterval.start,
+                            startdate);
 
-    if (parser_peek(p)->type == TOKEN_RANGE) {
-        if (expect(p, TOKEN_RANGE) < 0)
-            goto err;
-        if (expect_integer(p, &node->select.start_time) < 0)
-            goto err;
-        if (expect(p, TOKEN_TO) < 0)
-            goto err;
-        if (expect_integer(p, &node->select.end_time) < 0)
-            goto err;
-        node->select.flags = QF_RANGE;
+            if (expect(p, TOKEN_AND) < 0)
+                goto err;
+
+            char *enddate = expect_literal(p);
+            if (!enddate)
+                goto err;
+
+            copy_identifier(node->select.timeunit.dateinterval.end, enddate);
+        }
+        node->select.flags |= QF_RNGE;
     }
 
     if (parser_peek(p)->type == TOKEN_WHERE) {
         if (expect(p, TOKEN_WHERE) < 0)
             goto err;
         node->select.where = parse_where(p);
-        node->select.flags |= QF_WHERE;
+        node->select.flags |= QF_COND;
     }
 
-    if (parser_peek(p)->type == TOKEN_AGGREGATE) {
-        if (expect(p, TOKEN_AGGREGATE) < 0)
-            goto err;
-        node->select.agg_function = expect_aggregatefn(p);
-        if (node->select.agg_function < 0)
+    if (parser_peek(p)->type == TOKEN_SAMPLE) {
+        // Consume token
+        if (expect(p, TOKEN_SAMPLE) < 0)
             goto err;
 
-        node->select.flags |= QF_AGGREGATE;
+        if (expect(p, TOKEN_BY) < 0)
+            goto err;
 
-        if (parser_peek(p)->type == TOKEN_BY) {
-            if (expect(p, TOKEN_BY) < 0)
+        if (parser_peek(p)->type == TOKEN_TIMEUNIT) {
+            if (expect_timeunit(p, &node->select.sampling) < 0)
                 goto err;
-
-            char *groupby = expect_identifier(p);
-            if (!groupby)
-                goto err;
-
-            copy_identifier(node->select.group_by, groupby);
-
-            node->select.flags |= QF_GROUPBY;
         }
+
+        node->select.flags |= QF_SMPL;
+    }
+
+    if (parser_peek(p)->type == TOKEN_LIMIT) {
+        if (expect(p, TOKEN_LIMIT) < 0)
+            goto err;
+
+        if (expect_integer(p, &node->select.limit) < 0)
+            goto err;
+
+        node->select.flags |= QF_LIMT;
     }
 
     return node;
@@ -649,8 +1025,14 @@ stmt_t *stmt_parse(const char *input)
     parser_t parser = {.tokens = token_array.items, .pos = 0};
 
     switch (token_array.items[0].type) {
+    case TOKEN_USE:
+        node = parse_use(&parser);
+        break;
     case TOKEN_META:
         node = parse_meta(&parser);
+        break;
+    case TOKEN_CREATEDB:
+        node = parse_createdb(&parser);
         break;
     case TOKEN_CREATE:
         node = parse_create(&parser);
@@ -713,8 +1095,7 @@ stmt_t *stmt_make_create(bool single, const char *db_name, const char *ts_name,
     if (!stmt)
         return NULL;
 
-    stmt->type          = STMT_CREATE;
-    stmt->create.single = single;
+    stmt->type = STMT_CREATE;
     copy_identifier(stmt->create.db_name, db_name);
 
     if (ts_name) {
@@ -723,8 +1104,13 @@ stmt_t *stmt_make_create(bool single, const char *db_name, const char *ts_name,
         stmt->create.ts_name[0] = '\0';
     }
 
-    stmt->create.retention   = retention;
-    stmt->create.duplication = duplication;
+    if (retention > 0)
+        stmt->create.has_retention = true;
+    if (duplication > 0)
+        stmt->create.has_duplication = true;
+
+    stmt->create.retention.type  = TU_SINGLE;
+    stmt->create.retention.value = retention;
 
     return stmt;
 }
@@ -779,20 +1165,19 @@ bool stmt_insert_add_record(stmt_t *stmt, int64_t timestamp, double value)
 // Create a SELECT statement
 stmt_t *stmt_make_select(const char *db_name, const char *ts_name,
                          int64_t start_time, int64_t end_time,
-                         aggregate_fn_t agg_function, uint64_t interval)
+                         function_t agg_function, uint64_t interval)
 {
     stmt_t *stmt = malloc(sizeof(stmt_t));
     if (!stmt)
         return NULL;
 
     stmt->type = STMT_SELECT;
-    copy_identifier(stmt->select.db_name, db_name);
     copy_identifier(stmt->select.ts_name, ts_name);
 
-    stmt->select.start_time   = start_time;
-    stmt->select.end_time     = end_time;
-    stmt->select.agg_function = agg_function;
-    stmt->select.where        = NULL;
+    stmt->select.timeunit.tsinterval.start = start_time;
+    stmt->select.timeunit.tsinterval.end   = end_time;
+    stmt->select.function                  = agg_function;
+    stmt->select.where                     = NULL;
 
     return stmt;
 }
@@ -914,6 +1299,28 @@ static void print_where(const where_clause_t *where)
     print_where(where->right);
 }
 
+static void print_timeunit(const stmt_timeunit_t *tu)
+{
+    printf("  BETWEEN: ");
+    switch (tu->type) {
+    case TU_SINGLE:
+        printf("    [%" PRIi64 "]", tu->value);
+        break;
+    case TU_INTERVAL:
+        printf("    [%" PRIi64 "%s]", tu->interval.value, tu->interval.unit);
+        break;
+    case TU_TSINTERVAL:
+        printf("    start: [%" PRIi64 "] end: [%" PRIi64 "]",
+               tu->tsinterval.start, tu->tsinterval.end);
+        break;
+    case TU_DATEINTERVAL:
+        printf("    start: [%s] end: [%s]", tu->dateinterval.start,
+               tu->dateinterval.end);
+        break;
+    }
+    printf("\n");
+}
+
 // Print a statement for debugging
 void stmt_print(const stmt_t *stmt)
 {
@@ -927,14 +1334,30 @@ void stmt_print(const stmt_t *stmt)
         printf("Empty statement\n");
         break;
 
+    case STMT_CREATEDB:
+        printf("CREATEDB statement:\n");
+        printf("  DB Name: %s\n", stmt->create.db_name);
+        break;
+
+    case STMT_USE:
+        printf("USE statement:\n");
+        printf("   DB Name: %s\n", stmt->use.ts_name);
+        break;
+        break;
+
     case STMT_CREATE:
         printf("CREATE statement:\n");
-        printf("  Single: %s\n", stmt->create.single ? "true" : "false");
-        printf("  DB Name: %s\n", stmt->create.db_name);
-        if (!stmt->create.single) {
-            printf("  TS Name: %s\n", stmt->create.ts_name);
-            printf("  Retention: %d\n", stmt->create.retention);
-            printf("  Duplication: %d\n", stmt->create.duplication);
+        printf("  TS Name: %s\n", stmt->create.ts_name);
+        if (stmt->create.has_retention) {
+            if (stmt->create.retention.type == TU_SINGLE)
+                printf("  Retention: %lld\n", stmt->create.retention.value);
+            else if (stmt->create.retention.type == TU_INTERVAL)
+                printf("  Retention: %lld%s\n",
+                       stmt->create.retention.interval.value,
+                       stmt->create.retention.interval.unit);
+        }
+        if (stmt->create.has_duplication) {
+            printf("  Duplication: %s\n", stmt->create.duplication);
         }
         break;
 
@@ -949,9 +1372,8 @@ void stmt_print(const stmt_t *stmt)
 
     case STMT_INSERT:
         printf("INSERT statement:\n");
-        printf("  DB Name: %s\n", stmt->insert.db_name);
-        printf("  TS Name: %s\n", stmt->insert.ts_name);
-        printf("  Records (%zu):\n", stmt->insert.record_array.length);
+        printf("  INTO: %s\n", stmt->insert.ts_name);
+        printf("  VALUES (%zu):\n", stmt->insert.record_array.length);
         for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
             printf("    [%" PRIu64 "] = %f\n",
                    stmt->insert.record_array.items[i].timestamp,
@@ -961,13 +1383,24 @@ void stmt_print(const stmt_t *stmt)
 
     case STMT_SELECT:
         printf("SELECT statement:\n");
-        printf("  DB Name: %s\n", stmt->select.db_name);
-        printf("  TS Name: %s\n", stmt->select.ts_name);
-        printf("  Time Range: %" PRIi64 " to %" PRIi64 "\n",
-               stmt->select.start_time, stmt->select.end_time);
-        printf("  Aggregate Function: %d\n", stmt->select.agg_function);
-        printf("  WHERE Clause:\n");
-        print_where(stmt->select.where);
+        printf("  FROM: %s\n", stmt->select.ts_name);
+        if (stmt->select.flags & QF_RNGE) {
+            print_timeunit(&stmt->select.timeunit);
+        }
+        if (stmt->select.flags & QF_FUNC)
+            printf("  Aggregate Function: %d\n", stmt->select.function);
+        if (stmt->select.flags & QF_COND) {
+            printf("  WHERE Clause:\n");
+            print_where(stmt->select.where);
+        }
+        if (stmt->select.flags & QF_SMPL) {
+            printf("  SAMPLE BY: %" PRIu64 "%s\n",
+                   stmt->select.sampling.interval.value,
+                   stmt->select.sampling.interval.unit);
+        }
+        if (stmt->select.flags & QF_LIMT) {
+            printf("   LIMIT: %" PRIi64 "\n", stmt->select.limit);
+        }
         break;
 
     case STMT_META:

@@ -41,22 +41,6 @@ static void execute_create(const stmt_t *stmt, response_t *response)
     timeseries_db_t *tsdb = NULL;
     timeseries_t *ts      = NULL;
 
-    if (stmt->create.single) {
-        // Create database only
-        tsdb = tsdbmanager_add(stmt->create.db_name);
-        if (tsdb) {
-            tsdbmanager_setactive(stmt->create.db_name);
-            set_string_response(response, 0,
-                                "Database '%s' created successfully",
-                                stmt->create.db_name);
-            return;
-        }
-
-        set_string_response(response, 1, "Failed to create database '%s'",
-                            stmt->create.db_name);
-
-        return;
-    }
     // Get the specified database or use active database
     if (stmt->create.db_name[0] != '\0') {
         tsdb = tsdbmanager_get(stmt->create.db_name);
@@ -76,8 +60,9 @@ static void execute_create(const stmt_t *stmt, response_t *response)
     }
 
     // Create timeseries
-    ts = ts_create(tsdb, stmt->create.ts_name, stmt->create.retention,
-                   (duplication_policy_t)stmt->create.duplication);
+    // TODO handle duplication policy
+    ts =
+        ts_create(tsdb, stmt->create.ts_name, stmt->create.retention.value, -1);
 
     if (ts) {
         set_string_response(
@@ -170,7 +155,8 @@ static void execute_insert(const stmt_t *stmt, response_t *response)
  */
 static void execute_select(const stmt_t *stmt, response_t *response)
 {
-    timeseries_db_t *tsdb = tsdbmanager_get(stmt->select.db_name);
+    timeseries_db_t *tsdb = tsdbmanager_getactive();
+    // timeseries_db_t *tsdb = tsdbmanager_get(stmt->select.db_name);
     if (!tsdb) {
         set_string_response(response, 1, "Database '%s' not found",
                             stmt->create.db_name);
@@ -187,10 +173,10 @@ static void execute_select(const stmt_t *stmt, response_t *response)
     record_array_t records = {0};
 
     // Query data based on select mask
-    if (stmt->select.flags & QF_BASIC) {
+    if (stmt->select.flags & QF_BASE) {
         // Single point query
         record_t record;
-        if (ts_find(ts, stmt->select.start_time, &record) == 0) {
+        if (ts_find(ts, stmt->select.timeunit.tsinterval.start, &record) == 0) {
             // Prepare array response with single record
             response->type                  = RT_ARRAY;
             response->array_response.length = 1;
@@ -209,14 +195,14 @@ static void execute_select(const stmt_t *stmt, response_t *response)
         }
         set_string_response(response, 1,
                             "Error: Point not found at timestamp %" PRIu64,
-                            stmt->select.start_time);
+                            stmt->select.timeunit.tsinterval.start);
         return;
     }
 
-    if (stmt->select.flags & QF_RANGE) {
+    if (stmt->select.flags & QF_RNGE) {
         // Range query
-        int result = ts_range(ts, stmt->select.start_time,
-                              stmt->select.end_time, &records);
+        int result = ts_range(ts, stmt->select.timeunit.tsinterval.start,
+                              stmt->select.timeunit.tsinterval.end, &records);
 
         if (result == 0 && records.length > 0) {
             // Prepare array response from records
@@ -248,12 +234,14 @@ static void execute_select(const stmt_t *stmt, response_t *response)
             set_string_response(response, 1,
                                 "Error: Failed to query range [%" PRIu64
                                 ", %" PRIu64 "]",
-                                stmt->select.start_time, stmt->select.end_time);
+                                stmt->select.timeunit.tsinterval.start,
+                                stmt->select.timeunit.tsinterval.end);
         } else {
             set_string_response(response, 0,
                                 "No data found in range [%" PRIu64 ", %" PRIu64
                                 "]",
-                                stmt->select.start_time, stmt->select.end_time);
+                                stmt->select.timeunit.tsinterval.start,
+                                stmt->select.timeunit.tsinterval.end);
         }
         return;
     }

@@ -8,6 +8,7 @@
 
 #define IDENTIFIER_LENGTH 64
 #define RECORDS_LENGTH    32
+#define TS_MAXSIZE        24
 
 /*
  * String view APIs definition
@@ -21,29 +22,102 @@ typedef struct {
 } string_view_t;
 
 // Function to create a string view from a given source string and length
-string_view_t string_view_from_parts(const char *src, size_t len);
+string_view_t sv_from_parts(const char *src, size_t len);
 
 // Function to create a string view from a null-terminated source string
-string_view_t string_view_from_cstring(const char *src);
+string_view_t sv_from_cstring(const char *src);
 
 // Function to chop a string view by a delimiter and return the remaining view
-string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
+string_view_t sv_chop_by_delim(string_view_t *view, char delim);
 
 /**
- **  Grammar for the SQL query language
+ **  Grammar for the SQL query language. In its simplest implementation,
+ **  no labels no complex filtering:
+ **
+ ** - General handling
+ **
+ ** - Create new database
+ **
+ **     CREATEDB metrics
+ **
+ ** - Set a database as active
+ **
+ **     USE metrics
+ **
+ ** - Create a new timeseries in the active database
+ **
+ **     CREATE cpu_usage
+ **
+ ** - Insertion queries
+ **
+ **     INSERT INTO timeseries_name VALUES (timestamp, value)
+ **
+ ** - Single point inserts
+ **
+ **     INSERT INTO cpu_usage VALUES (1643673600, 78.5)
+ **     INSERT INTO cpu_usage VALUES ('2023-01-01 12:30:00', 78.5)
+ **
+ ** - Multiple points inserts
+ **
+ **     INSERT INTO cpu_usage VALUES
+ **         (1643673600, 78.5),
+ **         (1643673660, 80.2),
+ **         (1643673720, 75.1)
+ **
+ ** - Current time insert
+ **
+ **     INSERT INTO cpu_usage VALUES (now(), 78.5)
+ **
+ ** - Auto-timestamp (implicit)
+ **
+ **     INSERT INTO cpu_usage VALUE 78.5
+ **
+ ** - Selection queries
+ **
+ **     SELECT [value | function(value)]
+ **     FROM timeseries_name
+ **     [BETWEEN start_time AND end_time]
+ **     [SAMPLE BY interval]
+ **     [LIMIT n]
+ **
+ ** - Simple selection
+ **
+ **     SELECT value FROM cpu_usage
+ **
+ ** - Time range queries
+ **
+ **     SELECT value FROM cpu_usage BETWEEN 1612137600 AND 1612224000
+ **     SELECT value FROM cpu_usage BETWEEN '2023-01-01 00:00:00' AND
+ **     '2023-01-02 00:00:00'
+ **     SELECT value FROM cpu_usage BETWEEN now() - 24h AND now()
+ **
+ ** - Aggregations
+ **
+ **     SELECT avg(value) FROM cpu_usage BETWEEN '2023-01-01' AND '2023-01-31'
+ **     SELECT min(value), max(value), avg(value) FROM cpu_usage
+ **
+ ** - Limiting results
+ **
+ **     SELECT value FROM cpu_usage LIMIT 100
+ **     SELECT latest(value) FROM cpu_usage
+ **     SELECT earliest(value, 10) FROM cpu_usage
+ **
+ ** - Downsampling
+ **
+ **     SELECT value FROM cpu_usage SAMPLE BY 1h
+ **     SELECT avg(value) FROM cpu_usage BETWEEN '2023-01-01' AND '2023-01-31'
+ **     SAMPLE BY 1d
  **
  ** COMMAND     ::= CREATE_CMD | INSERT_CMD | SELECT_CMD | DELETE_CMD
  **
- ** CREATE_CMD  ::= "CREATE" IDENTIFIER
- **               | "CREATE" IDENTIFIER "INTO" IDENTIFIER [RETENTION]
- ** [DUPLICATION]
+ ** CREATE_CMD  ::= "CREATE" IDENTIFIER [RETENTION] [DUPLICATION]
  **
- ** INSERT_CMD  ::= "INSERT" IDENTIFIER "INTO" IDENTIFIER TIMESTAMP VALUE_LIST
+ ** INSERT_CMD  ::= "INSERT" "INTO" IDENTIFIER VALUE_LIST
  **
- ** SELECT_CMD  ::= "SELECT" IDENTIFIER "FROM" IDENTIFIER
- **                 "RANGE" TIMESTAMP "TO" TIMESTAMP
+ ** SELECT_CMD  ::= "SELECT" IDENTIFIER | AGG_FUNC(IDENTIFIER) "FROM" IDENTIFIER
+ **                 "BETWEEN" TIMESTAMP "AND" TIMESTAMP
  **                 "WHERE" "value" COMPARATOR IDENTIFIER
- **                 "AGGREGATE" AGG_FUNC "BY" IDENTIFIER
+ **                 "SAMPLE" "BY" IDENTIFIER
  **
  ** DELETE_CMD  ::= "DELETE" IDENTIFIER
  **               | "DELETE" IDENTIFIER "FROM" IDENTIFIER
@@ -51,8 +125,8 @@ string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
  ** RETENTION   ::= NUMBER
  ** DUPLICATION ::= NUMBER
  ** COMPARATOR  ::= ">" | "<" | "=" | "<=" | ">=" | "!="
- ** AGG_FUNC    ::= "AVG" | "MIN" | "MAX"
- ** VALUE_LIST  ::= VALUE ("," VALUE)*
+ ** AGG_FUNC    ::= "avg" | "min" | "max"
+ ** VALUE_LIST  ::= (TIMESTAMP, VALUE)+
  ** VALUE       ::= NUMBER
  ** TIMESTAMP   ::= NUMBER | "*"
  ** IDENTIFIER  ::= [A-Za-z_][A-Za-z0-9_]*
@@ -70,7 +144,7 @@ string_view_t string_view_chop_by_delim(string_view_t *view, const char delim);
 typedef struct token token_t;
 
 // Define aggregate function types
-typedef enum { AGG_NONE, AGG_AVG, AGG_MIN, AGG_MAX } aggregate_fn_t;
+typedef enum { FN_NONE, FN_AVG, FN_MIN, FN_MAX, FN_NOW, FN_LATEST } function_t;
 
 // Define operator types
 typedef enum {
@@ -86,13 +160,40 @@ typedef enum {
 // Define boolean operators
 typedef enum { BOOL_OP_NONE, BOOL_OP_AND, BOOL_OP_OR } boolean_op_t;
 
+typedef enum {
+    TU_SINGLE,
+    TU_INTERVAL,
+    TU_TSINTERVAL,
+    TU_DATEINTERVAL
+} stmt_tu_type_t;
+
+typedef struct stmt_timeunit {
+    stmt_tu_type_t type;
+    union {
+        int64_t value;
+        struct {
+            int64_t value;
+            char unit[TS_MAXSIZE];
+        } interval;
+        struct {
+            int64_t start;
+            int64_t end;
+        } tsinterval;
+        struct {
+            char start[TS_MAXSIZE];
+            char end[TS_MAXSIZE];
+        } dateinterval;
+    };
+} stmt_timeunit_t;
+
 // Define structure for CREATE statement
 typedef struct {
-    int single;
     char db_name[IDENTIFIER_LENGTH];
     char ts_name[IDENTIFIER_LENGTH];
-    int retention;
-    int duplication;
+    bool has_retention;
+    stmt_timeunit_t retention;
+    bool has_duplication;
+    char duplication[TS_MAXSIZE];
 } stmt_create_t;
 
 // Define structure for DELETE statement
@@ -128,11 +229,12 @@ typedef struct {
  * - With an interval to aggregate on
  */
 typedef enum query_flags {
-    QF_BASIC     = 0,
-    QF_RANGE     = 1 << 0,
-    QF_WHERE     = 1 << 1,
-    QF_AGGREGATE = 1 << 2,
-    QF_GROUPBY   = 1 << 3
+    QF_BASE = 0,
+    QF_RNGE = 1 << 0,
+    QF_FUNC = 1 << 1,
+    QF_COND = 1 << 2,
+    QF_SMPL = 1 << 3,
+    QF_LIMT = 1 << 4,
 } query_flags_t;
 
 // Define structure for WHERE clause in SELECT statement
@@ -149,24 +251,28 @@ typedef struct where_clause {
 
 // Define structure for SELECT statement
 typedef struct {
-    char db_name[IDENTIFIER_LENGTH];
     char ts_name[IDENTIFIER_LENGTH];
-    int64_t start_time;
-    int64_t end_time;
-
+    stmt_timeunit_t timeunit;
     // WHERE clause
     where_clause_t *where;
 
     // AGGREGATE information
-    aggregate_fn_t agg_function;
-    char group_by[IDENTIFIER_LENGTH]; // The "BY" identifier in the grammar
+    function_t function;
+    stmt_timeunit_t sampling;
+
+    // Limit
+    int64_t limit;
+
+    // Info about the content of the query
     query_flags_t flags;
 } stmt_select_t;
 
 // Define statement types
 typedef enum {
     STMT_EMPTY,
+    STMT_USE,
     STMT_META,
+    STMT_CREATEDB,
     STMT_CREATE,
     STMT_DELETE,
     STMT_INSERT,
@@ -176,10 +282,13 @@ typedef enum {
 
 typedef enum { META_DATABASES, META_TIMESERIES, META_UNKNOWN } meta_command_t;
 
+typedef stmt_create_t stmt_use_t;
+
 // Define a generic statement
 typedef struct {
     stmt_type_t type;
     union {
+        stmt_use_t use;
         stmt_create_t create;
         stmt_delete_t delete;
         stmt_insert_t insert;
@@ -188,6 +297,7 @@ typedef struct {
     };
 } stmt_t;
 
+void stmt_init(void);
 stmt_t *stmt_parse(const char *input);
 void stmt_free(stmt_t *stmt);
 void stmt_print(const stmt_t *stmt);
@@ -201,15 +311,11 @@ stmt_t *stmt_make_insert(const char *db_name, const char *ts_name);
 bool stmt_insert_add_record(stmt_t *stmt, int64_t timestamp, double value);
 stmt_t *stmt_make_select(const char *db_name, const char *ts_name,
                          int64_t start_time, int64_t end_time,
-                         aggregate_fn_t agg_function, uint64_t interval);
+                         function_t agg_function, uint64_t interval);
 where_clause_t *stmt_make_where_condition(const char *key, operator_t op,
                                           double value);
 bool stmt_add_where_condition(where_clause_t *base, boolean_op_t op,
                               where_clause_t *condition);
 bool stmt_set_where_clause(stmt_t *stmt, where_clause_t *where);
-
-// Helper functions for parsing specific parts
-operator_t stmt_parse_operator(const char *op_str);
-aggregate_fn_t stmt_parse_aggregate_function(const char *agg_str);
 
 #endif
