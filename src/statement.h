@@ -302,20 +302,4 @@ stmt_t *stmt_parse(const char *input);
 void stmt_free(stmt_t *stmt);
 void stmt_print(const stmt_t *stmt);
 
-// Create statement builders
-stmt_t *stmt_make_empty();
-stmt_t *stmt_make_create(bool single, const char *db_name, const char *ts_name,
-                         int retention, int duplication);
-stmt_t *stmt_make_delete(bool single, const char *db_name, const char *ts_name);
-stmt_t *stmt_make_insert(const char *db_name, const char *ts_name);
-bool stmt_insert_add_record(stmt_t *stmt, int64_t timestamp, double value);
-stmt_t *stmt_make_select(const char *db_name, const char *ts_name,
-                         int64_t start_time, int64_t end_time,
-                         function_t agg_function, uint64_t interval);
-where_clause_t *stmt_make_where_condition(const char *key, operator_t op,
-                                          double value);
-bool stmt_add_where_condition(where_clause_t *base, boolean_op_t op,
-                              where_clause_t *condition);
-bool stmt_set_where_clause(stmt_t *stmt, where_clause_t *where);
-
 #endif
