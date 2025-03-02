@@ -46,8 +46,8 @@ static int parse_create_ts_retention_duplication_test(void)
     ASSERT_SEQ(stmt->create.ts_name, "ts-test");
     ASSERT_TRUE(stmt->create.has_retention,
                 "FAIL: has_retention should be true\n");
-    ASSERT_EQ(stmt->create.retention.interval.value, 3);
-    ASSERT_SEQ(stmt->create.retention.interval.unit, "d");
+    ASSERT_EQ(stmt->create.retention.timespan.value, 3);
+    ASSERT_SEQ(stmt->create.retention.timespan.unit, "d");
     ASSERT_TRUE(stmt->create.has_duplication,
                 "FAIL: has_duplication should be true\n");
     ASSERT_SEQ(stmt->create.duplication, "ignore");
@@ -216,10 +216,10 @@ static int parse_select_test(void)
     }
 
     ASSERT_SEQ(stmt->select.ts_name, "ts-test");
-    ASSERT_EQ(stmt->select.sampling.interval.value, 4);
-    ASSERT_SEQ(stmt->select.sampling.interval.unit, "d");
-    ASSERT_EQ(stmt->select.timeunit.tsinterval.start, 2382913);
-    ASSERT_EQ(stmt->select.timeunit.tsinterval.end, 39238293);
+    ASSERT_EQ(stmt->select.sampling.timespan.value, 4);
+    ASSERT_SEQ(stmt->select.sampling.timespan.unit, "d");
+    ASSERT_EQ(stmt->select.selector.interval.start.value, 2382913);
+    ASSERT_EQ(stmt->select.selector.interval.end.value, 39238293);
     ASSERT_EQ(stmt->select.where->boolean_op, BOOL_OP_AND);
     ASSERT_FEQ(stmt->select.where->value, 12.2);
     ASSERT_EQ(stmt->select.where->operator, OP_GREATER);
@@ -253,8 +253,8 @@ static int parse_select_fn_test(void)
 
     ASSERT_SEQ(stmt->select.ts_name, "ts-test");
     ASSERT_EQ(stmt->select.function, FN_MIN);
-    ASSERT_EQ(stmt->select.timeunit.tsinterval.start, 2382913);
-    ASSERT_EQ(stmt->select.timeunit.tsinterval.end, 39238293);
+    ASSERT_EQ(stmt->select.selector.interval.start.value, 2382913);
+    ASSERT_EQ(stmt->select.selector.interval.end.value, 39238293);
 
     printf("PASS\n");
 
@@ -283,9 +283,8 @@ static int parse_select_now_fn_test(void)
 
     ASSERT_SEQ(stmt->select.ts_name, "ts-test");
     ASSERT_EQ(stmt->select.function, FN_MIN);
-    ASSERT_TRUE(stmt->select.timeunit.tsinterval.start > 0,
-                "FAIL: tsinterval.start should be positive");
-    ASSERT_EQ(stmt->select.timeunit.tsinterval.end, 39238293);
+    ASSERT_EQ(stmt->select.selector.interval.start.timefn, FN_NOW);
+    ASSERT_EQ(stmt->select.selector.interval.end.value, 39238293);
 
     printf("PASS\n");
 
@@ -314,8 +313,8 @@ static int parse_select_date_test(void)
 
     ASSERT_SEQ(stmt->select.ts_name, "ts-test");
     ASSERT_EQ(stmt->select.function, FN_LATEST);
-    ASSERT_SEQ(stmt->select.timeunit.dateinterval.start, "2025-03-01");
-    ASSERT_SEQ(stmt->select.timeunit.dateinterval.end, "2025-05-01");
+    ASSERT_SEQ(stmt->select.selector.interval.start.date, "2025-03-01");
+    ASSERT_SEQ(stmt->select.selector.interval.end.date, "2025-05-01");
 
     printf("PASS\n");
 
@@ -345,8 +344,8 @@ static int parse_select_limit_test(void)
     ASSERT_SEQ(stmt->select.ts_name, "ts-test");
     ASSERT_EQ(stmt->select.function, FN_LATEST);
     ASSERT_EQ(stmt->select.limit, 20);
-    ASSERT_SEQ(stmt->select.timeunit.dateinterval.start, "2025-03-01");
-    ASSERT_SEQ(stmt->select.timeunit.dateinterval.end, "2025-05-01");
+    ASSERT_SEQ(stmt->select.selector.interval.start.date, "2025-03-01");
+    ASSERT_SEQ(stmt->select.selector.interval.end.date, "2025-05-01");
 
     printf("PASS\n");
 

@@ -468,7 +468,7 @@ static int expect(parser_t *p, token_type_t type)
     return 0;
 }
 
-static int expect_timeunit(parser_t *p, stmt_timeunit_t *tu)
+static int expect_timespan(parser_t *p, stmt_timeunit_t *tu)
 {
     if (expect(p, TOKEN_TIMEUNIT) < 0)
         return -1;
@@ -476,11 +476,11 @@ static int expect_timeunit(parser_t *p, stmt_timeunit_t *tu)
     char *endptr;
     errno              = 0;
 
-    tu->interval.value = strtoll(timeunit, &endptr, 10);
+    tu->timespan.value = strtoll(timeunit, &endptr, 10);
     if (errno != 0)
         return -1;
 
-    char *ptr = &tu->interval.unit[0];
+    char *ptr = &tu->timespan.unit[0];
 
     for (; isalpha(*endptr) && is_identifier_char(*endptr); *ptr++ = *endptr++)
         ;
@@ -732,6 +732,50 @@ err:
     return NULL;
 }
 
+static int parse_timeunit(parser_t *p, stmt_timeunit_t *tu)
+{
+    switch (parser_peek(p)->type) {
+    case TOKEN_NUMBER:
+        tu->type = TU_VALUE;
+        if (expect_integer(p, &tu->value) < 0)
+            return -1;
+
+        break;
+
+    case TOKEN_LITERAL:
+        tu->type        = TU_DATE;
+        char *startdate = expect_literal(p);
+        if (!startdate)
+            return -1;
+
+        copy_identifier(tu->date, startdate);
+        break;
+
+    case TOKEN_TIMEUNIT:
+        tu->type = TU_SPAN;
+        if (expect_timespan(p, tu) < 0)
+            return -1;
+
+        break;
+
+    case TOKEN_FUNC_NOW:
+        tu->type = TU_FUNC;
+        // Just consume the tokens till the comma
+        if (expect(p, TOKEN_FUNC_NOW) < 0 || expect(p, TOKEN_LPAREN) < 0 ||
+            expect(p, TOKEN_RPAREN) < 0)
+            return -1;
+
+        tu->timefn = FN_NOW;
+
+        break;
+
+    default:
+        return -1;
+    }
+
+    return 0;
+}
+
 static stmt_t *parse_create(parser_t *p)
 {
     stmt_t *node = calloc(1, sizeof(*node));
@@ -754,19 +798,11 @@ static stmt_t *parse_create(parser_t *p)
 
     // Optional retention + duplication policy integers
 
-    if (parser_peek(p)->type == TOKEN_TIMEUNIT) {
-        if (expect_timeunit(p, &node->create.retention) < 0)
-            goto err;
-
-        node->create.retention.type = TU_INTERVAL;
-        node->create.has_retention  = true;
-    } else if (parser_peek(p)->type == TOKEN_NUMBER) {
+    token_t *t = parser_peek(p);
+    if (t->type == TOKEN_TIMEUNIT || t->type == TOKEN_NUMBER) {
         node->create.has_retention = true;
-        if (expect_integer(p, (int64_t *)&node->create.retention) < 0)
+        if (parse_timeunit(p, &node->create.retention) < 0)
             goto err;
-
-        node->create.retention.type = TU_SINGLE;
-        node->create.has_retention  = true;
     }
 
     if (parser_peek(p)->type == TOKEN_LITERAL) {
@@ -939,62 +975,11 @@ static int parse_between_clause(parser_t *p, stmt_t *stmt)
     if (expect(p, TOKEN_BETWEEN) < 0)
         return -1;
 
-    switch (parser_peek(p)->type) {
-    case TOKEN_NUMBER:
-        stmt->select.timeunit.type = TU_TSINTERVAL;
-        if (expect_integer(p, &stmt->select.timeunit.tsinterval.start) < 0 ||
-            expect(p, TOKEN_AND) < 0 ||
-            expect_integer(p, &stmt->select.timeunit.tsinterval.end) < 0)
-            return -1;
-        break;
-
-    case TOKEN_LITERAL:
-        stmt->select.timeunit.type = TU_DATEINTERVAL;
-
-        char *startdate            = expect_literal(p);
-        if (!startdate)
-            return -1;
-
-        copy_identifier(stmt->select.timeunit.dateinterval.start, startdate);
-
-        if (expect(p, TOKEN_AND) < 0)
-            return -1;
-
-        char *enddate = expect_literal(p);
-        if (!enddate)
-            return -1;
-
-        copy_identifier(stmt->select.timeunit.dateinterval.end, enddate);
-        break;
-
-    case TOKEN_FUNC_NOW:
-        // Just consume the tokens till the comma
-        if (expect(p, TOKEN_FUNC_NOW) < 0 || expect(p, TOKEN_LPAREN) < 0 ||
-            expect(p, TOKEN_RPAREN) < 0)
-            return -1;
-
-        stmt->select.timeunit.type             = TU_TSINTERVAL;
-        stmt->select.timeunit.tsinterval.start = current_micros();
-
-        if (expect(p, TOKEN_AND) < 0)
-            return -1;
-
-        if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
-            // Just consume the tokens till the comma
-            if (expect(p, TOKEN_FUNC_NOW) < 0 || expect(p, TOKEN_LPAREN) < 0 ||
-                expect(p, TOKEN_RPAREN) < 0)
-                return -1;
-
-            stmt->select.timeunit.tsinterval.end = current_micros();
-        } else {
-            if (expect_integer(p, &stmt->select.timeunit.tsinterval.end) < 0)
-                return -1;
-        }
-        break;
-
-    default:
+    stmt->select.selector.type = S_INTERVAL;
+    if (parse_timeunit(p, &stmt->select.selector.interval.start) < 0 ||
+        expect(p, TOKEN_AND) < 0 ||
+        parse_timeunit(p, &stmt->select.selector.interval.end) < 0)
         return -1;
-    }
 
     stmt->select.flags |= QF_RNGE;
 
@@ -1027,10 +1012,8 @@ static int parse_sample_clause(parser_t *p, stmt_t *stmt)
     if (expect(p, TOKEN_SAMPLE) < 0 || expect(p, TOKEN_BY) < 0)
         return -1;
 
-    if (parser_peek(p)->type == TOKEN_TIMEUNIT) {
-        if (expect_timeunit(p, &stmt->select.sampling) < 0)
-            return -1;
-    }
+    if (parse_timeunit(p, &stmt->select.sampling) < 0)
+        return -1;
 
     stmt->select.flags |= QF_SMPL;
 
@@ -1176,21 +1159,19 @@ static void print_where(const where_clause_t *where)
 
 static void print_timeunit(const stmt_timeunit_t *tu)
 {
-    printf("  BETWEEN: ");
     switch (tu->type) {
-    case TU_SINGLE:
+    case TU_VALUE:
         printf("    [%" PRIi64 "]", tu->value);
         break;
-    case TU_INTERVAL:
-        printf("    [%" PRIi64 "%s]", tu->interval.value, tu->interval.unit);
+    case TU_SPAN:
+        printf("    [%" PRIi64 "%s]", tu->timespan.value, tu->timespan.unit);
         break;
-    case TU_TSINTERVAL:
-        printf("    start: [%" PRIi64 "] end: [%" PRIi64 "]",
-               tu->tsinterval.start, tu->tsinterval.end);
+    case TU_FUNC:
+        // TOOD placeholder
+        printf("    [now()]");
         break;
-    case TU_DATEINTERVAL:
-        printf("    start: [%s] end: [%s]", tu->dateinterval.start,
-               tu->dateinterval.end);
+    case TU_DATE:
+        printf("    [%s]", tu->date);
         break;
     }
     printf("\n");
@@ -1224,12 +1205,8 @@ void stmt_print(const stmt_t *stmt)
         printf("CREATE statement:\n");
         printf("  TS Name: %s\n", stmt->create.ts_name);
         if (stmt->create.has_retention) {
-            if (stmt->create.retention.type == TU_SINGLE)
-                printf("  Retention: %lld\n", stmt->create.retention.value);
-            else if (stmt->create.retention.type == TU_INTERVAL)
-                printf("  Retention: %lld%s\n",
-                       stmt->create.retention.interval.value,
-                       stmt->create.retention.interval.unit);
+            printf("   Retention: ");
+            print_timeunit(&stmt->create.retention);
         }
         if (stmt->create.has_duplication) {
             printf("  Duplication: %s\n", stmt->create.duplication);
@@ -1260,7 +1237,23 @@ void stmt_print(const stmt_t *stmt)
         printf("SELECT statement:\n");
         printf("  FROM: %s\n", stmt->select.ts_name);
         if (stmt->select.flags & QF_RNGE) {
-            print_timeunit(&stmt->select.timeunit);
+            switch (stmt->select.selector.type) {
+            case S_SINGLE:
+                printf("   TIME:");
+                print_timeunit(&stmt->select.selector.timeunit);
+                break;
+            case S_INTERVAL:
+                printf("   INTERVAL:");
+                print_timeunit(&stmt->select.selector.interval.start);
+                print_timeunit(&stmt->select.selector.interval.end);
+                break;
+            case S_OPERATION:
+                printf("   INTERVAL:");
+                print_timeunit(&stmt->select.selector.binop.op1);
+                // TODO add operation translation
+                print_timeunit(&stmt->select.selector.binop.op2);
+                break;
+            }
         }
         if (stmt->select.flags & QF_FUNC)
             printf("  Aggregate Function: %d\n", stmt->select.function);
@@ -1269,9 +1262,8 @@ void stmt_print(const stmt_t *stmt)
             print_where(stmt->select.where);
         }
         if (stmt->select.flags & QF_SMPL) {
-            printf("  SAMPLE BY: %" PRIu64 "%s\n",
-                   stmt->select.sampling.interval.value,
-                   stmt->select.sampling.interval.unit);
+            printf("  SAMPLE BY:");
+            print_timeunit(&stmt->select.sampling);
         }
         if (stmt->select.flags & QF_LIMT) {
             printf("   LIMIT: %" PRIi64 "\n", stmt->select.limit);

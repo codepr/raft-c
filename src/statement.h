@@ -160,31 +160,41 @@ typedef enum {
 // Define boolean operators
 typedef enum { BOOL_OP_NONE, BOOL_OP_AND, BOOL_OP_OR } boolean_op_t;
 
-typedef enum {
-    TU_SINGLE,
-    TU_INTERVAL,
-    TU_TSINTERVAL,
-    TU_DATEINTERVAL
-} stmt_tu_type_t;
+// Define binary operators
+typedef enum { BIN_OP_ADD, BIN_OP_SUB, BIN_OP_MUL } binary_op_t;
+
+typedef enum { TU_VALUE, TU_DATE, TU_FUNC, TU_SPAN } stmt_tu_type_t;
 
 typedef struct stmt_timeunit {
     stmt_tu_type_t type;
     union {
         int64_t value;
+        char date[TS_MAXSIZE];
+        function_t timefn;
         struct {
             int64_t value;
             char unit[TS_MAXSIZE];
-        } interval;
-        struct {
-            int64_t start;
-            int64_t end;
-        } tsinterval;
-        struct {
-            char start[TS_MAXSIZE];
-            char end[TS_MAXSIZE];
-        } dateinterval;
+        } timespan;
     };
 } stmt_timeunit_t;
+
+typedef enum { S_SINGLE, S_INTERVAL, S_OPERATION } stmt_s_type_t;
+
+typedef struct stmt_selector {
+    stmt_s_type_t type;
+    union {
+        stmt_timeunit_t timeunit;
+        struct {
+            stmt_timeunit_t start;
+            stmt_timeunit_t end;
+        } interval;
+        struct {
+            stmt_timeunit_t op1;
+            binary_op_t binary_op;
+            stmt_timeunit_t op2;
+        } binop;
+    };
+} stmt_selector_t;
 
 // Define structure for CREATE statement
 typedef struct {
@@ -252,7 +262,7 @@ typedef struct where_clause {
 // Define structure for SELECT statement
 typedef struct {
     char ts_name[IDENTIFIER_LENGTH];
-    stmt_timeunit_t timeunit;
+    stmt_selector_t selector;
     // WHERE clause
     where_clause_t *where;
 
