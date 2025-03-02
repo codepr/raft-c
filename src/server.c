@@ -31,12 +31,54 @@
     set_string_response((resp), 1, "Error: not supported")
 
 /**
+ * Process a USE statement and generate appropriate response
+ *
+ * @param stmt The statement representing a META instruction
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_use(const stmt_t *stmt, response_t *rs)
+{
+    if (tsdbmanager_setactive(stmt->create.db_name) < 0)
+        set_string_response(rs, 1, "Database '%s' not found",
+                            stmt->create.db_name);
+    else
+        set_string_response(rs, 0, "Database '%s' selected",
+                            stmt->create.db_name);
+}
+
+/**
+ * Process a CREATEDB statement and generate appropriate response
+ *
+ * @param stmt The statement representing a META instruction
+ * @param response Pointer to response structure to be filled
+ */
+static void execute_createdb(const stmt_t *stmt, response_t *rs)
+{
+    timeseries_db_t *tsdb = tsdbmanager_get(stmt->create.db_name);
+    if (tsdb) {
+        set_string_response(rs, 1, "Database '%s' already exists",
+                            stmt->create.db_name);
+        return;
+    }
+
+    tsdb = tsdbmanager_add(stmt->create.db_name);
+    if (!tsdb) {
+        set_string_response(rs, 1, "Error creating '%s' database",
+                            stmt->create.db_name);
+        return;
+    }
+
+    set_string_response(rs, 0, "Database '%s' created successfully",
+                        stmt->create.db_name);
+}
+
+/**
  * Process a CREATE statement and generate appropriate response
  *
  * @param stmt The statement representing a CREATE instruction
  * @param response Pointer to response structure to be filled
  */
-static void execute_create(const stmt_t *stmt, response_t *response)
+static void execute_create(const stmt_t *stmt, response_t *rs)
 {
     timeseries_db_t *tsdb = NULL;
     timeseries_t *ts      = NULL;
@@ -45,7 +87,7 @@ static void execute_create(const stmt_t *stmt, response_t *response)
     if (stmt->create.db_name[0] != '\0') {
         tsdb = tsdbmanager_get(stmt->create.db_name);
         if (!tsdb) {
-            set_string_response(response, 1, "Database '%s' not found",
+            set_string_response(rs, 1, "Database '%s' not found",
                                 stmt->create.db_name);
 
             return;
@@ -54,7 +96,7 @@ static void execute_create(const stmt_t *stmt, response_t *response)
 
     tsdb = tsdbmanager_getactive();
     if (!tsdb) {
-        set_string_response(response, 1, "No active database");
+        set_string_response(rs, 1, "No active database");
 
         return;
     }
@@ -66,11 +108,10 @@ static void execute_create(const stmt_t *stmt, response_t *response)
 
     if (ts) {
         set_string_response(
-            response, 0,
-            "TimeSeries '%s' created successfully in database '%s'",
+            rs, 0, "TimeSeries '%s' created successfully in database '%s'",
             stmt->create.ts_name, stmt->create.db_name);
     } else {
-        set_string_response(response, 1, "Failed to create TimeSeries '%s'",
+        set_string_response(rs, 1, "Failed to create TimeSeries '%s'",
                             stmt->create.ts_name);
     }
 }
@@ -81,10 +122,10 @@ static void execute_create(const stmt_t *stmt, response_t *response)
  * @param stmt The statement representing a DELETE instruction
  * @param response Pointer to response structure to be filled
  */
-static void execute_delete(const stmt_t *stmt, response_t *response)
+static void execute_delete(const stmt_t *stmt, response_t *rs)
 {
     // Currently, deletion is not directly supported in the provided API
-    not_implemented(response);
+    not_implemented(rs);
 }
 
 /**
@@ -93,10 +134,10 @@ static void execute_delete(const stmt_t *stmt, response_t *response)
  * @param stmt The statement representing a META instruction
  * @param response Pointer to response structure to be filled
  */
-static void execute_meta(const stmt_t *stmt, response_t *response)
+static void execute_meta(const stmt_t *stmt, response_t *rs)
 {
     // Currently, meta is not directly supported in the provided API
-    not_implemented(response);
+    not_implemented(rs);
 }
 
 /**
@@ -105,19 +146,19 @@ static void execute_meta(const stmt_t *stmt, response_t *response)
  * @param stmt The statement representing an INSERT instruction
  * @param response Pointer to response structure to be filled
  */
-static void execute_insert(const stmt_t *stmt, response_t *response)
+static void execute_insert(const stmt_t *stmt, response_t *rs)
 {
     // Active database not supported yet
-    timeseries_db_t *tsdb = tsdbmanager_get(stmt->insert.db_name);
+    timeseries_db_t *tsdb = tsdbmanager_getactive();
     if (!tsdb) {
-        set_string_response(response, 1, "Database '%s' not found",
-                            stmt->create.db_name);
+        set_string_response(rs, 1,
+                            "No database in the system, create one first");
         return;
     }
 
     timeseries_t *ts = ts_get(tsdb, stmt->insert.ts_name);
     if (!ts) {
-        set_string_response(response, 1, "Timeseries '%s' not found",
+        set_string_response(rs, 1, "Timeseries '%s' not found",
                             stmt->create.ts_name);
         return;
     }
@@ -139,10 +180,10 @@ static void execute_insert(const stmt_t *stmt, response_t *response)
 
     // Set response based on insertion results
     if (error_count == 0) {
-        set_string_response(response, 0, "Successfully inserted %d points",
+        set_string_response(rs, 0, "Successfully inserted %d points",
                             success_count);
     } else {
-        set_string_response(response, 1, "Inserted %d points with %d errors",
+        set_string_response(rs, 1, "Inserted %d points with %d errors",
                             success_count, error_count);
     }
 }
@@ -153,19 +194,18 @@ static void execute_insert(const stmt_t *stmt, response_t *response)
  * @param stmt The statemenet representing a SELECT instruction
  * @param response Pointer to response structure to be filled
  */
-static void execute_select(const stmt_t *stmt, response_t *response)
+static void execute_select(const stmt_t *stmt, response_t *rs)
 {
     timeseries_db_t *tsdb = tsdbmanager_getactive();
-    // timeseries_db_t *tsdb = tsdbmanager_get(stmt->select.db_name);
     if (!tsdb) {
-        set_string_response(response, 1, "Database '%s' not found",
-                            stmt->create.db_name);
+        set_string_response(rs, 1,
+                            "No database in the system, create one first");
         return;
     }
 
     timeseries_t *ts = ts_get(tsdb, stmt->select.ts_name);
     if (!ts) {
-        set_string_response(response, 1, "Timeseries '%s' not found",
+        set_string_response(rs, 1, "Timeseries '%s' not found",
                             stmt->create.ts_name);
         return;
     }
@@ -178,22 +218,21 @@ static void execute_select(const stmt_t *stmt, response_t *response)
         record_t record;
         if (ts_find(ts, stmt->select.timeunit.tsinterval.start, &record) == 0) {
             // Prepare array response with single record
-            response->type                  = RT_ARRAY;
-            response->array_response.length = 1;
-            response->array_response.records =
-                malloc(sizeof(*response->array_response.records));
-            if (!response->array_response.records) {
-                set_string_response(response, 1,
-                                    "Error: Memory allocation failed");
+            rs->type                  = RT_ARRAY;
+            rs->array_response.length = 1;
+            rs->array_response.records =
+                malloc(sizeof(*rs->array_response.records));
+            if (!rs->array_response.records) {
+                set_string_response(rs, 1, "Error: Memory allocation failed");
 
                 return;
             }
-            response->array_response.records[0].timestamp = record.timestamp;
-            response->array_response.records[0].value     = record.value;
+            rs->array_response.records[0].timestamp = record.timestamp;
+            rs->array_response.records[0].value     = record.value;
 
             return;
         }
-        set_string_response(response, 1,
+        set_string_response(rs, 1,
                             "Error: Point not found at timestamp %" PRIu64,
                             stmt->select.timeunit.tsinterval.start);
         return;
@@ -206,22 +245,20 @@ static void execute_select(const stmt_t *stmt, response_t *response)
 
         if (result == 0 && records.length > 0) {
             // Prepare array response from records
-            response->type                   = RT_ARRAY;
-            response->array_response.length  = records.length;
-            response->array_response.records = malloc(
-                records.length * sizeof(*response->array_response.records));
+            rs->type                  = RT_ARRAY;
+            rs->array_response.length = records.length;
+            rs->array_response.records =
+                malloc(records.length * sizeof(*rs->array_response.records));
 
-            if (!response->array_response.records) {
-                set_string_response(response, 1,
-                                    "Error: Memory allocation failed");
+            if (!rs->array_response.records) {
+                set_string_response(rs, 1, "Error: Memory allocation failed");
                 return;
             }
 
             for (size_t i = 0; i < records.length; i++) {
-                response->array_response.records[i].timestamp =
+                rs->array_response.records[i].timestamp =
                     records.items[i].timestamp;
-                response->array_response.records[i].value =
-                    records.items[i].value;
+                rs->array_response.records[i].value = records.items[i].value;
             }
 
             // Free the record array items (data has been copied)
@@ -229,26 +266,25 @@ static void execute_select(const stmt_t *stmt, response_t *response)
 
             return;
         }
-        response->type = RT_STRING;
+        rs->type = RT_STRING;
         if (result != 0) {
-            set_string_response(response, 1,
+            set_string_response(rs, 1,
                                 "Error: Failed to query range [%" PRIu64
                                 ", %" PRIu64 "]",
                                 stmt->select.timeunit.tsinterval.start,
                                 stmt->select.timeunit.tsinterval.end);
         } else {
-            set_string_response(response, 0,
-                                "No data found in range [%" PRIu64 ", %" PRIu64
-                                "]",
-                                stmt->select.timeunit.tsinterval.start,
-                                stmt->select.timeunit.tsinterval.end);
+            set_string_response(
+                rs, 0, "No data found in range [%" PRIu64 ", %" PRIu64 "]",
+                stmt->select.timeunit.tsinterval.start,
+                stmt->select.timeunit.tsinterval.end);
         }
         return;
     }
 
     // Unsupported query type
     // TODO
-    set_string_response(response, 1, "Error: Unsupported query type");
+    set_string_response(rs, 1, "Error: Unsupported query type");
 }
 
 static response_t execute_statement(const stmt_t *stmt)
@@ -265,6 +301,12 @@ static response_t execute_statement(const stmt_t *stmt)
     }
 
     switch (stmt->type) {
+    case STMT_USE:
+        execute_use(stmt, &rs);
+        break;
+    case STMT_CREATEDB:
+        execute_createdb(stmt, &rs);
+        break;
     case STMT_CREATE:
         execute_create(stmt, &rs);
         break;
@@ -282,11 +324,7 @@ static response_t execute_statement(const stmt_t *stmt)
         break;
     default:
         // Unknown statement type (should not happen due to earlier check)
-        rs.type               = RT_STRING;
-        rs.string_response.rc = 1;
-        rs.string_response.length =
-            snprintf(rs.string_response.message, QUERYSIZE,
-                     "Error: Unsupported statement type");
+        set_string_response(&rs, 1, "Error: Unsupported statement type");
         break;
     }
 
