@@ -65,15 +65,6 @@ string_view_t sv_chop_by_delim(string_view_t *view, char delim)
     return result;
 }
 
-/*
- * Basic lexer, breaks down the input string (in the form of a string_view_t)
- * splitting it by space or ',' to allow the extraction of tokens.
- */
-typedef struct {
-    string_view_t view;
-    size_t length;
-} lexer_t;
-
 // Define token types
 typedef enum {
     TOKEN_USE,
@@ -353,8 +344,6 @@ static bool match_function(string_view_t *source, token_t *token)
         token->type = TOKEN_FUNC_MAX;
     } else if (sv_equals_cstr_ignorecase(*source, "avg")) {
         token->type = TOKEN_FUNC_AVG;
-    } else if (sv_equals_cstr_ignorecase(*source, "avg")) {
-        token->type = TOKEN_FUNC_AVG;
     } else if (sv_equals_cstr_ignorecase(*source, "now")) {
         token->type = TOKEN_FUNC_NOW;
     } else if (sv_equals_cstr_ignorecase(*source, "latest")) {
@@ -445,11 +434,10 @@ static void copy_identifier(char *dest, const char *src)
 static ssize_t tokenize(const char *query, token_array_t *token_array)
 {
     string_view_t view = sv_from_cstring(query);
-    lexer_t l          = {.view = view, .length = view.length};
     token_t token      = {0};
 
     do {
-        token = tokenize_next(&l.view, &token);
+        token = tokenize_next(&view, &token);
         da_append(token_array, token);
     } while (token.type != TOKEN_EOF && token.type != TOKEN_ERROR);
 
@@ -883,8 +871,20 @@ static stmt_t *parse_insert(parser_t *p)
         do {
             if (expect(p, TOKEN_LPAREN) < 0)
                 goto err;
-            if (expect_integer(p, &record.timestamp) < 0)
-                goto err;
+            if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
+                // Just consume the tokens till the comma
+                if (expect(p, TOKEN_FUNC_NOW) < 0)
+                    goto err;
+                if (expect(p, TOKEN_LPAREN) < 0)
+                    goto err;
+                if (expect(p, TOKEN_RPAREN) < 0)
+                    goto err;
+
+                record.timestamp = current_micros();
+            } else {
+                if (expect_integer(p, &record.timestamp) < 0)
+                    goto err;
+            }
             if (expect(p, TOKEN_COMMA) < 0)
                 goto err;
             if (expect_float(p, &record.value) < 0)
@@ -974,6 +974,36 @@ static stmt_t *parse_select(parser_t *p)
                 goto err;
 
             copy_identifier(node->select.timeunit.dateinterval.end, enddate);
+        } else if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
+            // Just consume the tokens till the comma
+            if (expect(p, TOKEN_FUNC_NOW) < 0)
+                goto err;
+            if (expect(p, TOKEN_LPAREN) < 0)
+                goto err;
+            if (expect(p, TOKEN_RPAREN) < 0)
+                goto err;
+
+            node->select.timeunit.type             = TU_TSINTERVAL;
+            node->select.timeunit.tsinterval.start = current_micros();
+
+            if (expect(p, TOKEN_AND) < 0)
+                goto err;
+
+            if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
+                // Just consume the tokens till the comma
+                if (expect(p, TOKEN_FUNC_NOW) < 0)
+                    goto err;
+                if (expect(p, TOKEN_LPAREN) < 0)
+                    goto err;
+                if (expect(p, TOKEN_RPAREN) < 0)
+                    goto err;
+
+                node->select.timeunit.tsinterval.end = current_micros();
+            } else {
+                if (expect_integer(p, &node->select.timeunit.tsinterval.end) <
+                    0)
+                    goto err;
+            }
         }
         node->select.flags |= QF_RNGE;
     }

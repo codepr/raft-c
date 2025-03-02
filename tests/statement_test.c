@@ -82,7 +82,7 @@ static int parse_insert_single_test(void)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    stmt_t *stmt = stmt_parse("INSERT INTO test-ts value 12.2344");
+    stmt_t *stmt = stmt_parse("INSERT INTO test-ts VALUE 12.2344");
 
     ASSERT_EQ(stmt->insert.record_array.length, 1);
     ASSERT_FEQ(stmt->insert.record_array.items[0].value, 12.2344);
@@ -145,6 +145,23 @@ static int parse_insert_multi_test(void)
     free(timestamps);
     free(values);
     free(query);
+
+    printf("PASS\n");
+    return 0;
+}
+
+static int parse_insert_multi_auto_ts_test(void)
+{
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    stmt_t *stmt = stmt_parse("INSERT INTO test-ts VALUES (now(), 12.2344)");
+
+    ASSERT_EQ(stmt->insert.record_array.length, 1);
+    ASSERT_FEQ(stmt->insert.record_array.items[0].value, 12.2344);
+    ASSERT_SEQ(stmt->insert.ts_name, "test-ts");
+
+    stmt_free(stmt);
 
     printf("PASS\n");
     return 0;
@@ -237,6 +254,37 @@ static int parse_select_fn_test(void)
     ASSERT_SEQ(stmt->select.ts_name, "ts-test");
     ASSERT_EQ(stmt->select.function, FN_MIN);
     ASSERT_EQ(stmt->select.timeunit.tsinterval.start, 2382913);
+    ASSERT_EQ(stmt->select.timeunit.tsinterval.end, 39238293);
+
+    printf("PASS\n");
+
+exit:
+    stmt_free(stmt);
+
+    return rc;
+}
+
+static int parse_select_now_fn_test(void)
+{
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    int rc = 0;
+
+    stmt_t *stmt =
+        stmt_parse("SELECT min(records) FROM ts-test BETWEEN now() AND "
+                   "39238293 ");
+
+    if (!stmt) {
+        fprintf(stderr, "FAIL: parsing failed\n");
+        rc = -1;
+        goto exit;
+    }
+
+    ASSERT_SEQ(stmt->select.ts_name, "ts-test");
+    ASSERT_EQ(stmt->select.function, FN_MIN);
+    ASSERT_TRUE(stmt->select.timeunit.tsinterval.start > 0,
+                "FAIL: tsinterval.start should be positive");
     ASSERT_EQ(stmt->select.timeunit.tsinterval.end, 39238293);
 
     printf("PASS\n");
@@ -347,7 +395,7 @@ int parser_test(void)
     printf("* %s\n\n", __FUNCTION__);
     fflush(stdout);
 
-    int cases   = 12;
+    int cases   = 14;
     int success = cases;
 
     success += parse_create_db_test();
@@ -357,10 +405,12 @@ int parser_test(void)
     success += parse_delete_test();
     success += parse_select_test();
     success += parse_select_fn_test();
+    success += parse_select_now_fn_test();
     success += parse_select_date_test();
     success += parse_select_limit_test();
     success += parse_select_where_test();
     success += parse_insert_multi_test();
+    success += parse_insert_multi_auto_ts_test();
     success += parse_insert_single_test();
     success += parse_create_ts_retention_duplication_test();
 
