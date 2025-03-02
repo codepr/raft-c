@@ -273,8 +273,11 @@ static inline bool is_identifier_char(char c)
     return !isspace(c) && c != '(' && c != ')';
 }
 
-static bool match_keyword(string_view_t *source, token_t *token)
+static bool match_keyword(string_view_t *source, token_t *token,
+                          const token_t *prev)
 {
+    if (prev->type == TOKEN_LPAREN || prev->type == TOKEN_WHERE)
+        return false;
     size_t i = 0;
     while (i < source->length && is_identifier_char(source->p[i])) {
         i++;
@@ -395,7 +398,7 @@ static bool match_identifier(string_view_t *source, token_t *token)
 }
 
 // Get next token from string view
-token_t tokenize_next(string_view_t *source)
+static token_t tokenize_next(string_view_t *source, const token_t *prev)
 {
     token_t token = {0};
 
@@ -416,7 +419,7 @@ token_t tokenize_next(string_view_t *source)
     // - identifiers or keywords
     if (match_separator(source, &token) || match_literal(source, &token) ||
         match_timeunit(source, &token) || match_number(source, &token) ||
-        match_keyword(source, &token) || match_identifier(source, &token))
+        match_keyword(source, &token, prev) || match_identifier(source, &token))
         return token;
 
     // If we reach here, it's an unexpected character
@@ -446,8 +449,7 @@ static ssize_t tokenize(const char *query, token_array_t *token_array)
     token_t token      = {0};
 
     do {
-        memset(&token, 0x00, sizeof(token));
-        token = tokenize_next(&l.view);
+        token = tokenize_next(&l.view, &token);
         da_append(token_array, token);
     } while (token.type != TOKEN_EOF && token.type != TOKEN_ERROR);
 

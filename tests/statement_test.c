@@ -308,6 +308,40 @@ exit:
     return rc;
 }
 
+static int parse_select_where_test(void)
+{
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    int rc       = 0;
+
+    stmt_t *stmt = stmt_parse("SELECT avg(records) FROM ts-test WHERE value > "
+                              "3.14159 AND timestamp < 2.5e-3");
+
+    if (!stmt) {
+        fprintf(stderr, "FAIL: parsing failed\n");
+        rc = -1;
+        goto exit;
+    }
+
+    ASSERT_SEQ(stmt->select.ts_name, "ts-test");
+    ASSERT_EQ(stmt->select.function, FN_AVG);
+    ASSERT_SEQ(stmt->select.where->key, "value");
+    ASSERT_FEQ(stmt->select.where->value, 3.14159);
+    ASSERT_EQ(stmt->select.where->operator, OP_GREATER);
+    ASSERT_EQ(stmt->select.where->boolean_op, BOOL_OP_AND);
+    ASSERT_SEQ(stmt->select.where->right->key, "timestamp");
+    ASSERT_FEQ(stmt->select.where->right->value, 2.5e-3);
+    ASSERT_EQ(stmt->select.where->right->operator, OP_LESS);
+
+    printf("PASS\n");
+
+exit:
+    stmt_free(stmt);
+
+    return rc;
+}
+
 int parser_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
@@ -325,6 +359,7 @@ int parser_test(void)
     success += parse_select_fn_test();
     success += parse_select_date_test();
     success += parse_select_limit_test();
+    success += parse_select_where_test();
     success += parse_insert_multi_test();
     success += parse_insert_single_test();
     success += parse_create_ts_retention_duplication_test();

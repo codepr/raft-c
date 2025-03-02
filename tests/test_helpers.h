@@ -18,8 +18,9 @@
 #define ASSERT_EQ(actual, expected)                                            \
     do {                                                                       \
         if ((actual) != (expected)) {                                          \
-            fprintf(stderr, "FAIL: integer expected %llu, Got %llu\n",         \
-                    (uint64_t)(expected), (uint64_t)(actual));                 \
+            fprintf(stderr,                                                    \
+                    "FAIL: integer expected %llu, got %llu (line %d)\n",       \
+                    (uint64_t)(expected), (uint64_t)(actual), __LINE__);       \
             return -1;                                                         \
         }                                                                      \
     } while (0)
@@ -27,17 +28,21 @@
 #define ASSERT_FEQ(actual, expected)                                           \
     do {                                                                       \
         if (!(fequals((actual), (expected)))) {                                \
-            fprintf(stderr, "FAIL: float expected %.5f, Got %.5f\n",           \
-                    (double_t)(expected), (double_t)(actual));                 \
+            fprintf(stderr, "FAIL: float expected %.5f, got %.5f (line %d)\n", \
+                    (double_t)(expected), (double_t)(actual), __LINE__);       \
             return -1;                                                         \
         }                                                                      \
     } while (0)
 
 #define ASSERT_SEQ(actual, expected)                                           \
     do {                                                                       \
+        if (!(actual)) {                                                       \
+            fprintf(stderr, "FAIL: NULL actual\n");                            \
+            return -1;                                                         \
+        }                                                                      \
         if (strncmp((actual), (expected), strlen((expected))) != 0) {          \
-            fprintf(stderr, "FAIL: expected %s, Got %s\n", (expected),         \
-                    (actual));                                                 \
+            fprintf(stderr, "FAIL: expected %s, got %s (line %d)\n",           \
+                    (expected), (actual), __LINE__);                           \
             return -1;                                                         \
         }                                                                      \
     } while (0)
