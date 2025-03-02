@@ -642,9 +642,7 @@ static where_clause_t *parse_where(parser_t *p)
     copy_identifier(node->key, key);
 
     node->operator= expect_operator(p);
-    if (node->operator<0)
-        goto err;
-    if (expect_float(p, &node->value) < 0)
+    if (node->operator<0 || expect_float(p, &node->value) < 0)
         goto err;
 
     if (parser_peek(p)->type == TOKEN_AND) {
@@ -837,10 +835,7 @@ static stmt_t *parse_insert(parser_t *p)
 
     node->type = STMT_INSERT;
 
-    if (expect(p, TOKEN_INSERT) < 0)
-        goto err;
-
-    if (expect(p, TOKEN_INTO) < 0)
+    if (expect(p, TOKEN_INSERT) < 0 || expect(p, TOKEN_INTO) < 0)
         goto err;
 
     char *tsname = expect_identifier(p);
@@ -873,11 +868,8 @@ static stmt_t *parse_insert(parser_t *p)
                 goto err;
             if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
                 // Just consume the tokens till the comma
-                if (expect(p, TOKEN_FUNC_NOW) < 0)
-                    goto err;
-                if (expect(p, TOKEN_LPAREN) < 0)
-                    goto err;
-                if (expect(p, TOKEN_RPAREN) < 0)
+                if (expect(p, TOKEN_FUNC_NOW) < 0 ||
+                    expect(p, TOKEN_LPAREN) < 0 || expect(p, TOKEN_RPAREN) < 0)
                     goto err;
 
                 record.timestamp = current_micros();
@@ -885,9 +877,8 @@ static stmt_t *parse_insert(parser_t *p)
                 if (expect_integer(p, &record.timestamp) < 0)
                     goto err;
             }
-            if (expect(p, TOKEN_COMMA) < 0)
-                goto err;
-            if (expect_float(p, &record.value) < 0)
+            if (expect(p, TOKEN_COMMA) < 0 ||
+                expect_float(p, &record.value) < 0)
                 goto err;
 
             da_append(&node->insert.record_array, record);
@@ -906,6 +897,160 @@ err:
     return NULL;
 }
 
+static int parse_select_column(parser_t *p, stmt_t *stmt)
+{
+    if (parser_peek(p)->type >= TOKEN_FUNC_MIN &&
+        parser_peek(p)->type <= TOKEN_FUNC_LATEST) {
+        stmt->select.function = expect_function(p);
+        // TODO skip for now
+        if (expect(p, TOKEN_LPAREN) < 0 || expect(p, TOKEN_IDENTIFIER) < 0 ||
+            expect(p, TOKEN_RPAREN) < 0)
+            return -1;
+
+        stmt->select.flags |= QF_FUNC;
+    } else {
+        // TODO skip for now
+        if (expect(p, TOKEN_IDENTIFIER) < 0)
+            return -1;
+    }
+
+    return 0;
+}
+
+static int parse_from_clause(parser_t *p, stmt_t *stmt)
+{
+    if (expect(p, TOKEN_FROM) < 0)
+        return -1;
+
+    char *tsname = expect_identifier(p);
+    if (!tsname)
+        return -1;
+
+    copy_identifier(stmt->select.ts_name, tsname);
+
+    return 0;
+}
+
+static int parse_between_clause(parser_t *p, stmt_t *stmt)
+{
+    if (parser_peek(p)->type != TOKEN_BETWEEN)
+        return 0;
+
+    if (expect(p, TOKEN_BETWEEN) < 0)
+        return -1;
+
+    switch (parser_peek(p)->type) {
+    case TOKEN_NUMBER:
+        stmt->select.timeunit.type = TU_TSINTERVAL;
+        if (expect_integer(p, &stmt->select.timeunit.tsinterval.start) < 0 ||
+            expect(p, TOKEN_AND) < 0 ||
+            expect_integer(p, &stmt->select.timeunit.tsinterval.end) < 0)
+            return -1;
+        break;
+
+    case TOKEN_LITERAL:
+        stmt->select.timeunit.type = TU_DATEINTERVAL;
+
+        char *startdate            = expect_literal(p);
+        if (!startdate)
+            return -1;
+
+        copy_identifier(stmt->select.timeunit.dateinterval.start, startdate);
+
+        if (expect(p, TOKEN_AND) < 0)
+            return -1;
+
+        char *enddate = expect_literal(p);
+        if (!enddate)
+            return -1;
+
+        copy_identifier(stmt->select.timeunit.dateinterval.end, enddate);
+        break;
+
+    case TOKEN_FUNC_NOW:
+        // Just consume the tokens till the comma
+        if (expect(p, TOKEN_FUNC_NOW) < 0 || expect(p, TOKEN_LPAREN) < 0 ||
+            expect(p, TOKEN_RPAREN) < 0)
+            return -1;
+
+        stmt->select.timeunit.type             = TU_TSINTERVAL;
+        stmt->select.timeunit.tsinterval.start = current_micros();
+
+        if (expect(p, TOKEN_AND) < 0)
+            return -1;
+
+        if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
+            // Just consume the tokens till the comma
+            if (expect(p, TOKEN_FUNC_NOW) < 0 || expect(p, TOKEN_LPAREN) < 0 ||
+                expect(p, TOKEN_RPAREN) < 0)
+                return -1;
+
+            stmt->select.timeunit.tsinterval.end = current_micros();
+        } else {
+            if (expect_integer(p, &stmt->select.timeunit.tsinterval.end) < 0)
+                return -1;
+        }
+        break;
+
+    default:
+        return -1;
+    }
+
+    stmt->select.flags |= QF_RNGE;
+
+    return 0;
+}
+
+static int parse_where_clause(parser_t *p, stmt_t *stmt)
+{
+    if (parser_peek(p)->type != TOKEN_WHERE)
+        return 0;
+
+    if (expect(p, TOKEN_WHERE) < 0)
+        return -1;
+
+    stmt->select.where = parse_where(p);
+    if (!stmt->select.where)
+        return -1;
+
+    stmt->select.flags |= QF_COND;
+
+    return 0;
+}
+
+static int parse_sample_clause(parser_t *p, stmt_t *stmt)
+{
+    if (parser_peek(p)->type != TOKEN_SAMPLE)
+        return 0;
+
+    // Consume token
+    if (expect(p, TOKEN_SAMPLE) < 0 || expect(p, TOKEN_BY) < 0)
+        return -1;
+
+    if (parser_peek(p)->type == TOKEN_TIMEUNIT) {
+        if (expect_timeunit(p, &stmt->select.sampling) < 0)
+            return -1;
+    }
+
+    stmt->select.flags |= QF_SMPL;
+
+    return 0;
+}
+
+static int parse_limit_clause(parser_t *p, stmt_t *stmt)
+{
+    if (parser_peek(p)->type != TOKEN_LIMIT)
+        return 0;
+
+    if (expect(p, TOKEN_LIMIT) < 0 ||
+        expect_integer(p, &stmt->select.limit) < 0)
+        return -1;
+
+    stmt->select.flags |= QF_LIMT;
+
+    return 0;
+}
+
 static stmt_t *parse_select(parser_t *p)
 {
     stmt_t *node = calloc(1, sizeof(*node));
@@ -915,137 +1060,15 @@ static stmt_t *parse_select(parser_t *p)
     node->type         = STMT_SELECT;
     node->select.flags = QF_BASE;
 
-    if (expect(p, TOKEN_SELECT) < 0)
-        goto err;
-
-    if (parser_peek(p)->type >= TOKEN_FUNC_MIN &&
-        parser_peek(p)->type <= TOKEN_FUNC_LATEST) {
-        node->select.function = expect_function(p);
-        // TODO skip for now
-        if (expect(p, TOKEN_LPAREN) < 0)
-            goto err;
-        if (expect(p, TOKEN_IDENTIFIER) < 0)
-            goto err;
-        if (expect(p, TOKEN_RPAREN) < 0)
-            goto err;
-
-        node->select.flags |= QF_FUNC;
-    } else {
-        // TODO skip for now
-        if (expect(p, TOKEN_IDENTIFIER) < 0)
-            goto err;
-    }
-
-    if (expect(p, TOKEN_FROM) < 0)
-        goto err;
-
-    char *tsname = expect_identifier(p);
-    if (!tsname)
-        goto err;
-
-    copy_identifier(node->select.ts_name, tsname);
-
-    if (parser_peek(p)->type == TOKEN_BETWEEN) {
-        if (expect(p, TOKEN_BETWEEN) < 0)
-            goto err;
-        if (parser_peek(p)->type == TOKEN_NUMBER) {
-            node->select.timeunit.type = TU_TSINTERVAL;
-            if (expect_integer(p, &node->select.timeunit.tsinterval.start) < 0)
-                goto err;
-            if (expect(p, TOKEN_AND) < 0)
-                goto err;
-            if (expect_integer(p, &node->select.timeunit.tsinterval.end) < 0)
-                goto err;
-        } else if (parser_peek(p)->type == TOKEN_LITERAL) {
-            node->select.timeunit.type = TU_DATEINTERVAL;
-
-            char *startdate            = expect_literal(p);
-            if (!startdate)
-                goto err;
-
-            copy_identifier(node->select.timeunit.dateinterval.start,
-                            startdate);
-
-            if (expect(p, TOKEN_AND) < 0)
-                goto err;
-
-            char *enddate = expect_literal(p);
-            if (!enddate)
-                goto err;
-
-            copy_identifier(node->select.timeunit.dateinterval.end, enddate);
-        } else if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
-            // Just consume the tokens till the comma
-            if (expect(p, TOKEN_FUNC_NOW) < 0)
-                goto err;
-            if (expect(p, TOKEN_LPAREN) < 0)
-                goto err;
-            if (expect(p, TOKEN_RPAREN) < 0)
-                goto err;
-
-            node->select.timeunit.type             = TU_TSINTERVAL;
-            node->select.timeunit.tsinterval.start = current_micros();
-
-            if (expect(p, TOKEN_AND) < 0)
-                goto err;
-
-            if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
-                // Just consume the tokens till the comma
-                if (expect(p, TOKEN_FUNC_NOW) < 0)
-                    goto err;
-                if (expect(p, TOKEN_LPAREN) < 0)
-                    goto err;
-                if (expect(p, TOKEN_RPAREN) < 0)
-                    goto err;
-
-                node->select.timeunit.tsinterval.end = current_micros();
-            } else {
-                if (expect_integer(p, &node->select.timeunit.tsinterval.end) <
-                    0)
-                    goto err;
-            }
-        }
-        node->select.flags |= QF_RNGE;
-    }
-
-    if (parser_peek(p)->type == TOKEN_WHERE) {
-        if (expect(p, TOKEN_WHERE) < 0)
-            goto err;
-        node->select.where = parse_where(p);
-        node->select.flags |= QF_COND;
-    }
-
-    if (parser_peek(p)->type == TOKEN_SAMPLE) {
-        // Consume token
-        if (expect(p, TOKEN_SAMPLE) < 0)
-            goto err;
-
-        if (expect(p, TOKEN_BY) < 0)
-            goto err;
-
-        if (parser_peek(p)->type == TOKEN_TIMEUNIT) {
-            if (expect_timeunit(p, &node->select.sampling) < 0)
-                goto err;
-        }
-
-        node->select.flags |= QF_SMPL;
-    }
-
-    if (parser_peek(p)->type == TOKEN_LIMIT) {
-        if (expect(p, TOKEN_LIMIT) < 0)
-            goto err;
-
-        if (expect_integer(p, &node->select.limit) < 0)
-            goto err;
-
-        node->select.flags |= QF_LIMT;
+    if (expect(p, TOKEN_SELECT) < 0 || parse_select_column(p, node) < 0 ||
+        parse_from_clause(p, node) < 0 || parse_between_clause(p, node) < 0 ||
+        parse_where_clause(p, node) < 0 || parse_sample_clause(p, node) < 0 ||
+        parse_limit_clause(p, node) < 0) {
+        free(node);
+        return NULL;
     }
 
     return node;
-
-err:
-    free(node);
-    return NULL;
 }
 
 stmt_t *stmt_parse(const char *input)
