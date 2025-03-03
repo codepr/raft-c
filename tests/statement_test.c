@@ -389,12 +389,57 @@ exit:
     return rc;
 }
 
+static int parse_select_operation_test(void)
+{
+    printf("%s..", __FUNCTION__);
+    fflush(stdout);
+
+    int rc = 0;
+
+    stmt_t *stmt =
+        stmt_parse("SELECT latest(records) FROM ts-test BETWEEN now() - 2d AND "
+                   "'2025-05-01' LIMIT 20");
+
+    if (!stmt) {
+        fprintf(stderr, "FAIL: parsing failed\n");
+        rc = -1;
+        goto exit;
+    }
+
+    ASSERT_SEQ(stmt->select.ts_name, "ts-test");
+    ASSERT_EQ(stmt->select.function, FN_LATEST);
+    ASSERT_EQ(stmt->select.limit, 20);
+    ASSERT_EQ(stmt->select.selector.type, S_INTERVAL);
+
+    // Start range
+    ASSERT_EQ(stmt->select.selector.interval.start.type, TU_OPS);
+    ASSERT_EQ(stmt->select.selector.interval.start.binop.tu1->type, TU_FUNC);
+    ASSERT_EQ(stmt->select.selector.interval.start.binop.tu1->timefn, FN_NOW);
+    ASSERT_EQ(stmt->select.selector.interval.start.binop.binary_op, BIN_OP_SUB);
+    ASSERT_EQ(stmt->select.selector.interval.start.binop.tu2->type, TU_SPAN);
+    ASSERT_EQ(stmt->select.selector.interval.start.binop.tu2->timespan.value,
+              2);
+    ASSERT_SEQ(stmt->select.selector.interval.start.binop.tu2->timespan.unit,
+               "d");
+
+    // End range
+    ASSERT_EQ(stmt->select.selector.interval.end.type, TU_DATE);
+    ASSERT_SEQ(stmt->select.selector.interval.end.date, "2025-05-01");
+
+    printf("PASS\n");
+
+exit:
+    stmt_free(stmt);
+
+    return rc;
+}
+
 int parser_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
     fflush(stdout);
 
-    int cases   = 14;
+    int cases   = 15;
     int success = cases;
 
     success += parse_create_db_test();
@@ -408,6 +453,7 @@ int parser_test(void)
     success += parse_select_date_test();
     success += parse_select_limit_test();
     success += parse_select_where_test();
+    success += parse_select_operation_test();
     success += parse_insert_multi_test();
     success += parse_insert_multi_auto_ts_test();
     success += parse_insert_single_test();

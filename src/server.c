@@ -109,7 +109,7 @@ static void execute_create(const stmt_t *stmt, response_t *rs)
     if (ts) {
         set_string_response(
             rs, 0, "TimeSeries '%s' created successfully in database '%s'",
-            stmt->create.ts_name, stmt->create.db_name);
+            stmt->create.ts_name, tsdb->datapath);
     } else {
         set_string_response(rs, 1, "Failed to create TimeSeries '%s'",
                             stmt->create.ts_name);
@@ -196,23 +196,23 @@ static void execute_insert(const stmt_t *stmt, response_t *rs)
  */
 static void execute_select(const stmt_t *stmt, response_t *rs)
 {
-    // timeseries_db_t *tsdb = tsdbmanager_getactive();
-    // if (!tsdb) {
-    //     set_string_response(rs, 1,
-    //                         "No database in the system, create one first");
-    //     return;
-    // }
-    //
-    // timeseries_t *ts = ts_get(tsdb, stmt->select.ts_name);
-    // if (!ts) {
-    //     set_string_response(rs, 1, "Timeseries '%s' not found",
-    //                         stmt->create.ts_name);
-    //     return;
-    // }
-    //
-    // record_array_t records = {0};
-    //
-    // // Query data based on select mask
+    timeseries_db_t *tsdb = tsdbmanager_getactive();
+    if (!tsdb) {
+        set_string_response(rs, 1,
+                            "No database in the system, create one first");
+        return;
+    }
+
+    timeseries_t *ts = ts_get(tsdb, stmt->select.ts_name);
+    if (!ts) {
+        set_string_response(rs, 1, "Timeseries '%s' not found",
+                            stmt->create.ts_name);
+        return;
+    }
+
+    record_array_t records = {0};
+
+    // Query data based on select mask
     // if (stmt->select.flags & QF_BASE) {
     //     // Single point query
     //     record_t record;
@@ -239,55 +239,55 @@ static void execute_select(const stmt_t *stmt, response_t *rs)
     //                         stmt->select.timeunit.tsinterval.start);
     //     return;
     // }
-    //
-    // if (stmt->select.flags & QF_RNGE) {
-    //     // Range query
-    //     int result = ts_range(ts, stmt->select.timeunit.tsinterval.start,
-    //                           stmt->select.timeunit.tsinterval.end,
-    //                           &records);
-    //
-    //     if (result == 0 && records.length > 0) {
-    //         // Prepare array response from records
-    //         rs->type                  = RT_ARRAY;
-    //         rs->array_response.length = records.length;
-    //         rs->array_response.records =
-    //             malloc(records.length * sizeof(*rs->array_response.records));
-    //
-    //         if (!rs->array_response.records) {
-    //             set_string_response(rs, 1, "Error: Memory allocation
-    //             failed"); return;
-    //         }
-    //
-    //         for (size_t i = 0; i < records.length; i++) {
-    //             rs->array_response.records[i].timestamp =
-    //                 records.items[i].timestamp;
-    //             rs->array_response.records[i].value = records.items[i].value;
-    //         }
-    //
-    //         // Free the record array items (data has been copied)
-    //         free(records.items);
-    //
-    //         return;
-    //     }
-    //     rs->type = RT_STRING;
-    //     if (result != 0) {
-    //         set_string_response(rs, 1,
-    //                             "Error: Failed to query range [%" PRIu64
-    //                             ", %" PRIu64 "]",
-    //                             stmt->select.timeunit.tsinterval.start,
-    //                             stmt->select.timeunit.tsinterval.end);
-    //     } else {
-    //         set_string_response(
-    //             rs, 0, "No data found in range [%" PRIu64 ", %" PRIu64 "]",
-    //             stmt->select.timeunit.tsinterval.start,
-    //             stmt->select.timeunit.tsinterval.end);
-    //     }
-    //     return;
-    // }
-    //
-    // // Unsupported query type
-    // // TODO
-    // set_string_response(rs, 1, "Error: Unsupported query type");
+
+    if (stmt->select.flags & QF_RNGE) {
+        // Range query
+        int result =
+            ts_range(ts, stmt->select.selector.interval.start.value,
+                     stmt->select.selector.interval.end.value, &records);
+
+        if (result == 0 && records.length > 0) {
+            // Prepare array response from records
+            rs->type                  = RT_ARRAY;
+            rs->array_response.length = records.length;
+            rs->array_response.records =
+                malloc(records.length * sizeof(*rs->array_response.records));
+
+            if (!rs->array_response.records) {
+                set_string_response(rs, 1, "Error: Memory allocation failed");
+                return;
+            }
+
+            for (size_t i = 0; i < records.length; i++) {
+                rs->array_response.records[i].timestamp =
+                    records.items[i].timestamp;
+                rs->array_response.records[i].value = records.items[i].value;
+            }
+
+            // Free the record array items (data has been copied)
+            free(records.items);
+
+            return;
+        }
+        rs->type = RT_STRING;
+        if (result != 0) {
+            set_string_response(rs, 1,
+                                "Error: Failed to query range [%" PRIu64
+                                ", %" PRIu64 "]",
+                                stmt->select.selector.interval.start.value,
+                                stmt->select.selector.interval.end.value);
+        } else {
+            set_string_response(
+                rs, 0, "No data found in range [%" PRIu64 ", %" PRIu64 "]",
+                stmt->select.selector.interval.start.value,
+                stmt->select.selector.interval.end.value);
+        }
+        return;
+    }
+
+    // Unsupported query type
+    // TODO
+    set_string_response(rs, 1, "Error: Unsupported query type");
 }
 
 static response_t execute_statement(const stmt_t *stmt)

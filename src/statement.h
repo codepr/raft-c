@@ -163,7 +163,13 @@ typedef enum { BOOL_OP_NONE, BOOL_OP_AND, BOOL_OP_OR } boolean_op_t;
 // Define binary operators
 typedef enum { BIN_OP_ADD, BIN_OP_SUB, BIN_OP_MUL } binary_op_t;
 
-typedef enum { TU_VALUE, TU_DATE, TU_FUNC, TU_SPAN } stmt_tu_type_t;
+// Define timeunit type
+// - Value such as 16737263797324
+// - Date such as 2025-03-01
+// - Func such as now()
+// - Span such as 3ms / 1d etc
+// - Ops  such as + / - / *
+typedef enum { TU_VALUE, TU_DATE, TU_FUNC, TU_SPAN, TU_OPS } stmt_tu_type_t;
 
 typedef struct stmt_timeunit {
     stmt_tu_type_t type;
@@ -175,10 +181,15 @@ typedef struct stmt_timeunit {
             int64_t value;
             char unit[TS_MAXSIZE];
         } timespan;
+        struct {
+            struct stmt_timeunit *tu1;
+            binary_op_t binary_op;
+            struct stmt_timeunit *tu2;
+        } binop;
     };
 } stmt_timeunit_t;
 
-typedef enum { S_SINGLE, S_INTERVAL, S_OPERATION } stmt_s_type_t;
+typedef enum { S_SINGLE, S_INTERVAL } stmt_s_type_t;
 
 typedef struct stmt_selector {
     stmt_s_type_t type;
@@ -188,11 +199,6 @@ typedef struct stmt_selector {
             stmt_timeunit_t start;
             stmt_timeunit_t end;
         } interval;
-        struct {
-            stmt_timeunit_t op1;
-            binary_op_t binary_op;
-            stmt_timeunit_t op2;
-        } binop;
     };
 } stmt_selector_t;
 
@@ -232,11 +238,12 @@ typedef struct {
 
 /*
  * Select mask, to define the kind of type of query
- * - Single point lookup
- * - Range of points
- * - With a WHERE clause
- * - With an aggregation function
- * - With an interval to aggregate on
+ * - BASE - All the points lookup
+ * - RNGE - Range of points between two timestamps
+ * - FUNC - Includes an aggregation fn such as MAX/MIN/AVG etc
+ * - COND - With a WHERE clause
+ * - SMPL - With an interval to aggregate on
+ * - LIMT - Limits the number of results
  */
 typedef enum query_flags {
     QF_BASE = 0,

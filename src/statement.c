@@ -102,6 +102,9 @@ typedef enum {
     TOKEN_FUNC_MAX,
     TOKEN_FUNC_AVG,
     TOKEN_FUNC_NOW,
+    TOKEN_BINARY_OP_ADD,
+    TOKEN_BINARY_OP_SUB,
+    TOKEN_BINARY_OP_MUL,
     TOKEN_FUNC_LATEST,
     TOKEN_BY,
     TOKEN_EOF
@@ -131,6 +134,15 @@ static bool match_separator(string_view_t *source, token_t *token)
         break;
     case ',':
         token->type = TOKEN_COMMA;
+        break;
+    case '-':
+        token->type = TOKEN_BINARY_OP_SUB;
+        break;
+    case '+':
+        token->type = TOKEN_BINARY_OP_ADD;
+        break;
+    case '*':
+        token->type = TOKEN_BINARY_OP_MUL;
         break;
     default:
         return false;
@@ -355,6 +367,11 @@ static bool match_function(string_view_t *source, token_t *token)
     return true;
 }
 
+static inline bool is_binaryop(string_view_t *source)
+{
+    return *source->p == '-' || *source->p == '+' || *source->p == '*';
+}
+
 static bool match_identifier(string_view_t *source, token_t *token)
 {
     size_t i = 0;
@@ -362,7 +379,9 @@ static bool match_identifier(string_view_t *source, token_t *token)
         i++;
     }
 
-    string_view_t value     = sv_from_parts(source->p, i);
+    string_view_t value = sv_from_parts(source->p, i);
+    if (is_binaryop(&value))
+        return false;
 
     // It's an identifier - check if it's followed by a parenthesis
     string_view_t remaining = *source;
@@ -732,6 +751,8 @@ err:
     return NULL;
 }
 
+static int parse_binaryop(parser_t *p, stmt_timeunit_t *tu, binary_op_t op);
+
 static int parse_timeunit(parser_t *p, stmt_timeunit_t *tu)
 {
     switch (parser_peek(p)->type) {
@@ -770,6 +791,58 @@ static int parse_timeunit(parser_t *p, stmt_timeunit_t *tu)
         break;
 
     default:
+        return -1;
+    }
+
+    switch (parser_peek(p)->type) {
+    case TOKEN_BINARY_OP_ADD:
+        expect(p, TOKEN_BINARY_OP_ADD);
+        if (parse_binaryop(p, tu, BIN_OP_ADD) < 0)
+            return -1;
+
+        break;
+    case TOKEN_BINARY_OP_SUB:
+        expect(p, TOKEN_BINARY_OP_SUB);
+        if (parse_binaryop(p, tu, BIN_OP_SUB) < 0)
+            return -1;
+
+        break;
+    case TOKEN_BINARY_OP_MUL:
+        expect(p, TOKEN_BINARY_OP_MUL);
+        if (parse_binaryop(p, tu, BIN_OP_MUL) < 0)
+            return -1;
+
+        break;
+    default:
+        break;
+    }
+
+    return 0;
+}
+
+static int parse_binaryop(parser_t *p, stmt_timeunit_t *tu, binary_op_t op)
+{
+    // We must save the original values cause we're using unions,
+    // which share the same memory layout
+    stmt_tu_type_t original_type = tu->type;
+    function_t original_timefn   = tu->timefn;
+    tu->type                     = TU_OPS;
+    tu->binop.binary_op          = op;
+    tu->binop.tu1                = calloc(1, sizeof(*tu->binop.tu1));
+    if (!tu->binop.tu1)
+        return -1;
+
+    tu->binop.tu1->type   = original_type;
+    tu->binop.tu1->timefn = original_timefn;
+    tu->binop.tu2         = calloc(1, sizeof(*tu->binop.tu2));
+
+    if (!tu->binop.tu2) {
+        free(tu->binop.tu1);
+        return -1;
+    }
+    if (parse_timeunit(p, tu->binop.tu2) < 0) {
+        free(tu->binop.tu1);
+        free(tu->binop.tu2);
         return -1;
     }
 
@@ -1047,6 +1120,12 @@ static stmt_t *parse_select(parser_t *p)
         parse_from_clause(p, node) < 0 || parse_between_clause(p, node) < 0 ||
         parse_where_clause(p, node) < 0 || parse_sample_clause(p, node) < 0 ||
         parse_limit_clause(p, node) < 0) {
+        if (node->select.selector.type == S_INTERVAL) {
+            if (node->select.selector.interval.start.type == TU_OPS)
+                free(node->select.selector.interval.start.binop.tu1);
+            if (node->select.selector.interval.end.type == TU_OPS)
+                free(node->select.selector.interval.end.binop.tu1);
+        }
         free(node);
         return NULL;
     }
@@ -1157,24 +1236,42 @@ static void print_where(const where_clause_t *where)
     print_where(where->right);
 }
 
+static void print_binaryop(binary_op_t op)
+{
+    switch (op) {
+    case BIN_OP_ADD:
+        printf("+");
+        break;
+    case BIN_OP_SUB:
+        printf("-");
+        break;
+    case BIN_OP_MUL:
+        printf("*");
+        break;
+    }
+}
+
 static void print_timeunit(const stmt_timeunit_t *tu)
 {
     switch (tu->type) {
     case TU_VALUE:
-        printf("    [%" PRIi64 "]", tu->value);
+        printf("[%" PRIi64 "]", tu->value);
         break;
     case TU_SPAN:
-        printf("    [%" PRIi64 "%s]", tu->timespan.value, tu->timespan.unit);
+        printf("[%" PRIi64 "%s]", tu->timespan.value, tu->timespan.unit);
         break;
     case TU_FUNC:
         // TOOD placeholder
-        printf("    [now()]");
+        printf("[now()]");
         break;
     case TU_DATE:
-        printf("    [%s]", tu->date);
+        printf("[%s]", tu->date);
         break;
+    case TU_OPS:
+        print_timeunit(tu->binop.tu1);
+        print_binaryop(tu->binop.binary_op);
+        print_timeunit(tu->binop.tu2);
     }
-    printf("\n");
 }
 
 // Print a statement for debugging
@@ -1239,19 +1336,14 @@ void stmt_print(const stmt_t *stmt)
         if (stmt->select.flags & QF_RNGE) {
             switch (stmt->select.selector.type) {
             case S_SINGLE:
-                printf("   TIME:");
+                printf("   TIME: ");
                 print_timeunit(&stmt->select.selector.timeunit);
                 break;
             case S_INTERVAL:
-                printf("   INTERVAL:");
+                printf("   INTERVAL: ");
                 print_timeunit(&stmt->select.selector.interval.start);
+                printf(" ");
                 print_timeunit(&stmt->select.selector.interval.end);
-                break;
-            case S_OPERATION:
-                printf("   INTERVAL:");
-                print_timeunit(&stmt->select.selector.binop.op1);
-                // TODO add operation translation
-                print_timeunit(&stmt->select.selector.binop.op2);
                 break;
             }
         }
@@ -1262,7 +1354,7 @@ void stmt_print(const stmt_t *stmt)
             print_where(stmt->select.where);
         }
         if (stmt->select.flags & QF_SMPL) {
-            printf("  SAMPLE BY:");
+            printf("  SAMPLE BY: ");
             print_timeunit(&stmt->select.sampling);
         }
         if (stmt->select.flags & QF_LIMT) {
