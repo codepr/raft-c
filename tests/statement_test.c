@@ -439,7 +439,7 @@ int parser_test(void)
     printf("* %s\n\n", __FUNCTION__);
     fflush(stdout);
 
-    int cases   = 15;
+    int cases   = 16;
     int success = cases;
 
     success += parse_create_db_test();

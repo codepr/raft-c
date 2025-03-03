@@ -69,7 +69,7 @@ typedef struct record_array {
 
 /*
  * Time series chunk, main data structure to handle the time-series, it carries
- * some a base offset which represents the 1st timestamp inserted and the
+ * a base offset which represents the 1st timestamp inserted and the
  * columns data. Data are stored in a single array, using a base_offset as a
  * strating timestamp, resulting in the timestamps fitting in the allocated
  * space.
@@ -86,17 +86,17 @@ typedef struct timeseries_chunk {
 /*
  * Time series, main data structure to handle the time-series, it carries some
  * basic informations like the name of the series and the retention time. Data
- * are stored in 2 Timeseries_Chunk, a current and latest timestamp one and one
- * to account for out of order points that will be merged later when flushing
- * on disk.
+ * are stored in 2 timeseries_chunk_t, a current and latest timestamp one and
+ * one to account for out of order points that will be merged later when
+ * flushing on disk.
  */
 typedef struct timeseries {
     int64_t retention;
     char name[TS_NAME_MAX_LENGTH];
     char db_datapath[DATAPATH_SIZE];
     char pathbuf[PATHBUF_SIZE];
-    timeseries_chunk_t head;
-    timeseries_chunk_t prev;
+    timeseries_chunk_t *head;
+    timeseries_chunk_t *prev;
     partition_t partitions[TS_MAX_PARTITIONS];
     size_t partition_nr;
     duplication_policy_t policy;
