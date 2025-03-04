@@ -13,7 +13,7 @@ static const size_t BLOCK_SIZE = 1 << 12;
 
 int partition_init(partition_t *p, const char *path, uint64_t base)
 {
-    int err = c_log_init(&p->clog, path, base);
+    int err = cl_init(&p->clog, path, base);
     if (err < 0)
         return -1;
 
@@ -30,7 +30,7 @@ int partition_init(partition_t *p, const char *path, uint64_t base)
 
 int partition_load(partition_t *p, const char *path, uint64_t base)
 {
-    int err = c_log_load(&p->clog, path, base);
+    int err = cl_load(&p->clog, path, base);
     if (err < 0)
         return -1;
 
@@ -46,7 +46,7 @@ int partition_load(partition_t *p, const char *path, uint64_t base)
 
 static int commit_records_to_log(partition_t *p, const uint8_t *buf, size_t len)
 {
-    int err = c_log_append_batch(&p->clog, buf, len);
+    int err = cl_append_batch(&p->clog, buf, len);
     if (err < 0)
         return -1;
 
@@ -111,7 +111,7 @@ int partition_flush_chunk(partition_t *p, const ts_chunk_t *tc,
     // Set base nanoseconds for the commit log
     if (p->start_ts == 0) {
         uint64_t base_ns = tc->start_ts % (uint64_t)1e9;
-        c_log_set_base_ns(&p->clog, base_ns);
+        cl_set_base_ns(&p->clog, base_ns);
     }
 
     // Update timestamps
@@ -150,7 +150,7 @@ int partition_find(const partition_t *p, uint8_t *dst, uint64_t timestamp)
 
     uint64_t end = end_offset(p, &range);
 
-    ssize_t n    = c_log_read_at(&p->clog, &ptr, range.start, end);
+    ssize_t n    = cl_read_at(&p->clog, &ptr, range.start, end);
     if (n < 0)
         return -1;
 
@@ -192,7 +192,7 @@ int partition_range(const partition_t *p, uint8_t *dst, uint64_t t0,
     uint8_t buf[BLOCK_SIZE];
     uint8_t *ptr = &buf[0];
 
-    ssize_t n    = c_log_read_at(&p->clog, &ptr, r0.start, end1);
+    ssize_t n    = cl_read_at(&p->clog, &ptr, r0.start, end1);
     if (n < 0)
         return -1;
 

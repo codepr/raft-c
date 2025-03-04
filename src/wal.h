@@ -6,11 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define WAL_PATH_SIZE 512
+#define WAL_PATHSIZE 512
 
 typedef struct wal {
     FILE *fp;
-    char path[WAL_PATH_SIZE];
+    char path[WAL_PATHSIZE];
     size_t size;
 } wal_t;
 

@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define RECORDSIZE sizeof(uint64_t) + sizeof(double_t)
+#define WAL_RECORDSIZE sizeof(uint64_t) + sizeof(double_t)
 
 static const char t[2] = {'t', 'h'};
 
@@ -39,7 +39,7 @@ int wal_delete(wal_t *w)
     if (err < 0)
         return -1;
     w->size = 0;
-    char tmp[WAL_PATH_SIZE + 5];
+    char tmp[WAL_PATHSIZE + 5];
     snprintf(tmp, sizeof(tmp), "%s.log", w->path);
 
     return remove(tmp);
@@ -65,15 +65,15 @@ errdefer:
 
 int wal_append(wal_t *wal, uint64_t ts, double_t value)
 {
-    uint8_t buf[RECORDSIZE];
+    uint8_t buf[WAL_RECORDSIZE];
 
     write_i64(buf, ts);
     write_f64(buf + sizeof(uint64_t), value);
 
     // TODO Fix to handle multiple points in the same timestamp
-    if (pwrite(fileno(wal->fp), buf, RECORDSIZE, wal->size) < 0)
+    if (pwrite(fileno(wal->fp), buf, WAL_RECORDSIZE, wal->size) < 0)
         return -1;
-    wal->size += RECORDSIZE;
+    wal->size += WAL_RECORDSIZE;
     return 0;
 }
 

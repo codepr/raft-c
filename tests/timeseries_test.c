@@ -4,9 +4,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#define POINTSNR 90
-#define INTERVAL 115000
-#define TESTDIR  "logdata/testdb/"
+#define POINTSNR  90
+#define INTERVAL  115000
+#define TESTDIR   "logdata/testdb/"
+#define TESTCASES 100
 
 static uint64_t timestamps[POINTSNR] = {0};
 
@@ -30,7 +31,7 @@ static int find_single_record_test(timeseries_t *ts)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    int cases  = 100;
+    int cases  = TESTCASES;
     int index  = 0;
     record_t r = {0};
 
@@ -90,7 +91,7 @@ static int find_range_records_test(timeseries_t *ts)
     int rc             = 0;
     int start          = 0;
     int end            = 0;
-    int cases          = 100;
+    int cases          = TESTCASES;
     record_array_t out = {0};
 
     for (int i = 0; i < cases; ++i) {
@@ -128,14 +129,14 @@ static int insert_out_of_order_test(timeseries_t *ts)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    int rc         = 0;
-    int cases      = 50;
-    int index      = 0;
-    int seen[100]  = {0};
-    uint64_t newts = 0;
-    uint64_t delta = 3e4;
-    double_t value = 0.0f;
-    record_t r     = {0};
+    int rc              = 0;
+    int cases           = TESTCASES / 2;
+    int index           = 0;
+    int seen[TESTCASES] = {0};
+    uint64_t newts      = 0;
+    uint64_t delta      = 3e4;
+    double_t value      = 0.0f;
+    record_t r          = {0};
 
     for (int i = 0; i < cases; ++i) {
         // Not the most efficient way to do it..
@@ -176,13 +177,13 @@ static int insert_out_of_bounds_test(timeseries_t *ts)
     printf("%s..", __FUNCTION__);
     fflush(stdout);
 
-    int cases      = 50;
-    int index      = 0;
-    int seen[100]  = {0};
-    uint64_t newts = 0;
-    uint64_t delta = 5e9;
-    double_t value = 0.0f;
-    record_t r     = {0};
+    int cases           = TESTCASES / 2;
+    int index           = 0;
+    int seen[TESTCASES] = {0};
+    uint64_t newts      = 0;
+    uint64_t delta      = 5e9;
+    double_t value      = 0.0f;
+    record_t r          = {0};
 
     for (int i = 0; i < cases; ++i) {
         // Not the most efficient way to do it..
