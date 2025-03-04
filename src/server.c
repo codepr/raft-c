@@ -101,10 +101,11 @@ static void execute_create(const stmt_t *stmt, response_t *rs)
         return;
     }
 
+    ts_opts_t opts = {.retention = stmt->create.retention.value};
+
     // Create timeseries
     // TODO handle duplication policy
-    ts =
-        ts_create(tsdb, stmt->create.ts_name, stmt->create.retention.value, -1);
+    ts             = ts_create(tsdb, stmt->create.ts_name, opts);
 
     if (ts) {
         set_string_response(

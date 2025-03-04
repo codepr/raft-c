@@ -229,7 +229,8 @@ int timeseries_test(void)
     if (!db)
         return -1;
 
-    timeseries_t *ts = ts_create(db, "temperatures", 0, DP_IGNORE);
+    ts_opts_t opts   = {0};
+    timeseries_t *ts = ts_create(db, "temperatures", opts);
     if (!ts)
         return -1;
 

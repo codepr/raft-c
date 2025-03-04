@@ -7,12 +7,12 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *BASE_PATH         = "logdata";
+static const char *BASEPATH          = "logdata";
 static const size_t LINEAR_THRESHOLD = 192;
-static const size_t RECORD_BINARY_SIZE =
-    (sizeof(uint64_t) * 2) + sizeof(double_t);
-const size_t TS_FLUSH_SIZE   = 512; // 512b
-const size_t TS_BATCH_OFFSET = sizeof(uint64_t) * 3;
+static const size_t RECORD_BINSIZE = (sizeof(uint64_t) * 2) + sizeof(double_t);
+const size_t TS_MIN_FLUSHSIZE      = 256;  // 256b
+const size_t TS_FLUSHSIZE          = 4096; // 4Kb
+const size_t TS_BATCH_OFFSET       = sizeof(uint64_t) * 3;
 
 timeseries_db_t *tsdb_init(const char *datapath)
 {
@@ -22,7 +22,7 @@ timeseries_db_t *tsdb_init(const char *datapath)
     if (strlen(datapath) > DATAPATH_SIZE)
         return NULL;
 
-    if (makedir(BASE_PATH) < 0)
+    if (makedir(BASEPATH) < 0)
         return NULL;
 
     timeseries_db_t *tsdb = malloc(sizeof(*tsdb));
@@ -33,7 +33,7 @@ timeseries_db_t *tsdb_init(const char *datapath)
 
     // Create the DB path if it doesn't exist
     char pathbuf[PATHBUF_SIZE];
-    snprintf(pathbuf, sizeof(pathbuf), "%s/%s", BASE_PATH, tsdb->datapath);
+    snprintf(pathbuf, sizeof(pathbuf), "%s/%s", BASEPATH, tsdb->datapath);
     if (makedir(pathbuf) < 0)
         return NULL;
 
@@ -43,7 +43,7 @@ timeseries_db_t *tsdb_init(const char *datapath)
 void tsdb_close(timeseries_db_t *tsdb) { free(tsdb); }
 
 timeseries_t *ts_create(const timeseries_db_t *tsdb, const char *name,
-                        int64_t retention, duplication_policy_t policy)
+                        ts_opts_t opts)
 {
     if (!tsdb || !name)
         return NULL;
@@ -55,9 +55,15 @@ timeseries_t *ts_create(const timeseries_db_t *tsdb, const char *name,
     if (!ts)
         return NULL;
 
-    ts->retention    = retention;
+    if (opts.flushsize <= 0)
+        opts.flushsize = TS_FLUSHSIZE;
+
+    // We want to cap the minimum flush size, no zero allowed here
+    if (opts.flushsize < TS_MIN_FLUSHSIZE)
+        opts.flushsize = TS_MIN_FLUSHSIZE;
+
+    ts->opts         = opts;
     ts->partition_nr = 0;
-    ts->policy       = policy;
     for (int i = 0; i < TS_MAX_PARTITIONS; ++i)
         memset(&ts->partitions[i], 0x00, sizeof(ts->partitions[i]));
 
@@ -101,7 +107,7 @@ timeseries_t *ts_get(const timeseries_db_t *tsdb, const char *name)
     return ts;
 }
 
-static void ts_chunk_zero(timeseries_chunk_t *tc)
+static void ts_chunk_zero(ts_chunk_t *tc)
 {
     tc->base_offset = 0;
     tc->start_ts    = 0;
@@ -110,16 +116,16 @@ static void ts_chunk_zero(timeseries_chunk_t *tc)
     tc->wal.size    = 0;
 }
 
-static timeseries_chunk_t *ts_chunk_make(void)
+static ts_chunk_t *ts_chunk_make(void)
 {
-    timeseries_chunk_t *chunk = calloc(1, sizeof(*chunk));
+    ts_chunk_t *chunk = calloc(1, sizeof(*chunk));
     if (!chunk)
         return NULL;
     return chunk;
 }
 
-static int ts_chunk_init(timeseries_chunk_t *tc, const char *path,
-                         uint64_t base_ts, int main)
+static int ts_chunk_init(ts_chunk_t *tc, const char *path, uint64_t base_ts,
+                         int main)
 {
     tc->base_offset = base_ts;
     tc->start_ts    = 0;
@@ -135,7 +141,7 @@ static int ts_chunk_init(timeseries_chunk_t *tc, const char *path,
     return 0;
 }
 
-static void ts_chunk_reset(timeseries_chunk_t *tc)
+static void ts_chunk_reset(ts_chunk_t *tc)
 {
     if (tc->base_offset != 0) {
         for (int i = 0; i < TS_CHUNK_SIZE; ++i) {
@@ -152,7 +158,7 @@ static void ts_chunk_reset(timeseries_chunk_t *tc)
     tc->max_index   = 0;
 }
 
-static int ts_chunk_record_fit(const timeseries_chunk_t *tc, uint64_t sec)
+static int ts_chunk_record_fit(const ts_chunk_t *tc, uint64_t sec)
 {
     // Relative offset inside the 2 arrays
     ssize_t index = sec - tc->base_offset;
@@ -205,8 +211,8 @@ static int record_cmp(const record_t *r1, const record_t *r2)
  *   checking it with `ts_chunk_record_fit(2)`
  *
  */
-static int ts_chunk_set_record(timeseries_chunk_t *tc, uint64_t sec,
-                               uint64_t nsec, double_t value)
+static int ts_chunk_set_record(ts_chunk_t *tc, uint64_t sec, uint64_t nsec,
+                               double_t value)
 {
     // Relative offset inside the 2 arrays
     size_t index   = tc->base_offset == 0 ? 0 : sec - tc->base_offset;
@@ -245,7 +251,7 @@ static int ts_chunk_set_record(timeseries_chunk_t *tc, uint64_t sec,
     return 0;
 }
 
-static int ts_chunk_load(timeseries_chunk_t *tc, const char *pathbuf,
+static int ts_chunk_load(ts_chunk_t *tc, const char *pathbuf,
                          uint64_t base_timestamp, int main)
 {
 
@@ -289,7 +295,7 @@ static int ts_chunk_load(timeseries_chunk_t *tc, const char *pathbuf,
 
 int ts_init(timeseries_t *ts)
 {
-    snprintf(ts->pathbuf, sizeof(ts->pathbuf), "%s/%s/%s", BASE_PATH,
+    snprintf(ts->pathbuf, sizeof(ts->pathbuf), "%s/%s/%s", BASEPATH,
              ts->db_datapath, ts->name);
 
     if (makedir(ts->pathbuf) < 0)
@@ -368,7 +374,7 @@ static int ts_flush_prev(timeseries_t *ts, const char *path)
     if (!pt->initialized && partition_init(pt, path, ts->head->base_offset) < 0)
         return TS_E_FLUSH_CHUNK_FAIL;
 
-    if (partition_flush_chunk(pt, ts->prev) < 0)
+    if (partition_flush_chunk(pt, ts->prev, ts->opts.flushsize) < 0)
         return TS_E_FLUSH_CHUNK_FAIL;
 
     // Clean up the prev chunk and delete it's WAL
@@ -475,7 +481,7 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
 
     // if the limit is reached we dump the chunks into disk and create 2 new
     // ones
-    if (wal_size(&ts->head->wal) >= TS_FLUSH_SIZE) {
+    if (wal_size(&ts->head->wal) >= ts->opts.flushsize) {
         uint64_t base       = ts->prev->base_offset > 0 ? ts->prev->base_offset
                                                         : ts->head->base_offset;
         size_t partition_nr = ts->partition_nr == 0 ? 0 : ts->partition_nr - 1;
@@ -493,10 +499,10 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
         }
 
         // Dump chunks into disk and create new ones
-        if (partition_flush_chunk(pt, ts->prev) < 0)
+        if (partition_flush_chunk(pt, ts->prev, ts->opts.flushsize) < 0)
             return TS_E_FLUSH_PARTITION_FAIL;
 
-        if (partition_flush_chunk(pt, ts->head) < 0)
+        if (partition_flush_chunk(pt, ts->head, ts->opts.flushsize) < 0)
             return TS_E_FLUSH_PARTITION_FAIL;
 
         // Reset clean both head and prev in-memory chunks
@@ -527,7 +533,7 @@ int ts_insert(timeseries_t *ts, uint64_t timestamp, double_t value)
     return ts_chunk_set_record(ts->head, sec, nsec, value);
 }
 
-static int ts_search_index(const timeseries_chunk_t *tc, uint64_t sec,
+static int ts_search_index(const ts_chunk_t *tc, uint64_t sec,
                            const record_t *target, record_t *dst)
 {
     if (tc->base_offset > sec)
@@ -596,7 +602,7 @@ int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r)
         return -1;
 
     // Look for the record on disk
-    uint8_t buf[RECORD_BINARY_SIZE];
+    uint8_t buf[RECORD_BINSIZE];
     ssize_t partition_i = 0;
     for (size_t n = 0; n <= ts->partition_nr; ++n) {
         if (ts->partitions[n].clog.base_timestamp > 0 &&
@@ -625,8 +631,8 @@ int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r)
     return 0;
 }
 
-static void ts_chunk_range(const timeseries_chunk_t *tc, uint64_t t0,
-                           uint64_t t1, record_array_t *out)
+static void ts_chunk_range(const ts_chunk_t *tc, uint64_t t0, uint64_t t1,
+                           record_array_t *out)
 {
     uint64_t sec0 = t0 / (uint64_t)1e9;
     uint64_t sec1 = t1 / (uint64_t)1e9;
@@ -826,7 +832,7 @@ size_t ts_record_timestamp(const uint8_t *buf)
 size_t ts_record_write(const record_t *r, uint8_t *buf)
 {
     // Record full size u64
-    size_t record_size = RECORD_BINARY_SIZE;
+    size_t record_size = RECORD_BINSIZE;
     write_i64(buf, record_size);
     buf += sizeof(uint64_t);
     // Timestamp u64

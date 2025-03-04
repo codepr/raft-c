@@ -4,7 +4,7 @@
 #include "commitlog.h"
 #include "index.h"
 
-typedef struct timeseries_chunk timeseries_chunk_t;
+typedef struct ts_chunk ts_chunk_t;
 
 typedef struct partition {
     commitlog_t clog;
@@ -18,7 +18,8 @@ int partition_init(partition_t *p, const char *path, uint64_t base);
 
 int partition_load(partition_t *p, const char *path, uint64_t base);
 
-int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc);
+int partition_flush_chunk(partition_t *p, const ts_chunk_t *tc,
+                          size_t flushsize);
 
 int partition_find(const partition_t *p, uint8_t *dst, uint64_t timestamp);
 

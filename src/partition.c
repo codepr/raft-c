@@ -59,7 +59,8 @@ static int commit_records_to_log(partition_t *p, const uint8_t *buf, size_t len)
     return 0;
 }
 
-int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc)
+int partition_flush_chunk(partition_t *p, const ts_chunk_t *tc,
+                          size_t flushsize)
 {
 
     // Temporary array
@@ -67,7 +68,7 @@ int partition_flush_chunk(partition_t *p, const timeseries_chunk_t *tc)
 
     size_t total_records             = 0;
     size_t batch_size                = 0;
-    uint8_t *buf                     = malloc(TS_FLUSH_SIZE * 4);
+    uint8_t *buf                     = malloc(flushsize * 4);
     if (!buf)
         return -1;
 

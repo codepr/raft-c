@@ -26,7 +26,7 @@
 #define TS_E_FLUSH_CHUNK_FAIL     -9
 #define TS_E_INVALID_RANGE        -10
 
-extern const size_t TS_FLUSH_SIZE;
+extern const size_t TS_FLUSHSIZE;
 extern const size_t TS_BATCH_OFFSET;
 
 /*
@@ -74,14 +74,20 @@ typedef struct record_array {
  * strating timestamp, resulting in the timestamps fitting in the allocated
  * space.
  */
-typedef struct timeseries_chunk {
+typedef struct ts_chunk {
     wal_t wal;
     uint64_t base_offset;
     uint64_t start_ts;
     uint64_t end_ts;
     size_t max_index;
     record_array_t points[TS_CHUNK_SIZE];
-} timeseries_chunk_t;
+} ts_chunk_t;
+
+typedef struct ts_opts {
+    int64_t retention;
+    size_t flushsize;
+    duplication_policy_t policy;
+} ts_opts_t;
 
 /*
  * Time series, main data structure to handle the time-series, it carries some
@@ -91,15 +97,14 @@ typedef struct timeseries_chunk {
  * flushing on disk.
  */
 typedef struct timeseries {
-    int64_t retention;
     char name[TS_NAME_MAX_LENGTH];
     char db_datapath[DATAPATH_SIZE];
     char pathbuf[PATHBUF_SIZE];
-    timeseries_chunk_t *head;
-    timeseries_chunk_t *prev;
+    ts_chunk_t *head;
+    ts_chunk_t *prev;
     partition_t partitions[TS_MAX_PARTITIONS];
     size_t partition_nr;
-    duplication_policy_t policy;
+    ts_opts_t opts;
 } timeseries_t;
 
 extern int ts_init(timeseries_t *ts);
@@ -119,18 +124,12 @@ typedef struct timeseries_db {
     char datapath[DATAPATH_SIZE];
 } timeseries_db_t;
 
-typedef struct ts_opts {
-    int64_t retention;
-    size_t ts_flushsize;
-    duplication_policy_t policy;
-} ts_opts_t;
-
 extern timeseries_db_t *tsdb_init(const char *datapath);
 
 extern void tsdb_close(timeseries_db_t *tsdb);
 
 extern timeseries_t *ts_create(const timeseries_db_t *tsdb, const char *name,
-                               int64_t retention, duplication_policy_t policy);
+                               ts_opts_t opts);
 
 extern timeseries_t *ts_get(const timeseries_db_t *tsdb, const char *name);
 
