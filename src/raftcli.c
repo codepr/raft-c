@@ -1,6 +1,6 @@
 #include "client.h"
 #include "encoding.h"
-#include "statement.h"
+#include "statement_parse.h"
 #include "timeutil.h"
 #include <errno.h>
 #include <inttypes.h>

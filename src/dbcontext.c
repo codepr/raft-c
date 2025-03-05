@@ -1,4 +1,4 @@
-#include "tsdbmanager.h"
+#include "dbcontext.h"
 #include "hash.h"
 
 #define BASESIZE 64
@@ -11,7 +11,7 @@ static size_t hash_dbname(const char *name, size_t mapsize)
     return hash % mapsize;
 }
 
-int tsdbmanager_init(size_t size)
+int dbcontext_init(size_t size)
 {
     if (tsdb_ht != NULL) {
         return 0; // Already initialized
@@ -35,7 +35,7 @@ int tsdbmanager_init(size_t size)
     return 0;
 }
 
-void tsdbmanager_free(void)
+void dbcontext_free(void)
 {
     if (!tsdb_ht) {
         return;
@@ -57,10 +57,10 @@ void tsdbmanager_free(void)
     tsdb_ht = NULL;
 }
 
-timeseries_db_t *tsdbmanager_add(const char *name)
+timeseries_db_t *dbcontext_add(const char *name)
 {
     if (!tsdb_ht) {
-        if (tsdbmanager_init(BASESIZE) != 0) {
+        if (dbcontext_init(BASESIZE) != 0) {
             return NULL;
         }
     }
@@ -106,7 +106,7 @@ timeseries_db_t *tsdbmanager_add(const char *name)
     return new_db;
 }
 
-timeseries_db_t *tsdbmanager_get(const char *name)
+timeseries_db_t *dbcontext_get(const char *name)
 {
     if (!tsdb_ht) {
         return NULL;
@@ -125,9 +125,9 @@ timeseries_db_t *tsdbmanager_get(const char *name)
     return NULL;
 }
 
-int tsdbmanager_setactive(const char *name)
+int dbcontext_setactive(const char *name)
 {
-    timeseries_db_t *db = tsdbmanager_get(name);
+    timeseries_db_t *db = dbcontext_get(name);
     if (!db) {
         return -1;
     }
@@ -136,7 +136,7 @@ int tsdbmanager_setactive(const char *name)
     return 0;
 }
 
-timeseries_db_t *tsdbmanager_getactive(void)
+timeseries_db_t *dbcontext_getactive(void)
 {
     return tsdb_ht ? tsdb_ht->active_db : NULL;
 }

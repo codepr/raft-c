@@ -1,13 +1,13 @@
 #include "server.h"
 #include "cluster.h"
 #include "config.h"
+#include "dbcontext.h"
 #include "encoding.h"
 #include "iomux.h"
 #include "logger.h"
 #include "network.h"
-#include "statement.h"
+#include "statement_parse.h"
 #include "timeseries.h"
-#include "tsdbmanager.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -38,7 +38,7 @@
  */
 static void execute_use(const stmt_t *stmt, response_t *rs)
 {
-    if (tsdbmanager_setactive(stmt->create.db_name) < 0)
+    if (dbcontext_setactive(stmt->create.db_name) < 0)
         set_string_response(rs, 1, "Database '%s' not found",
                             stmt->create.db_name);
     else
@@ -54,14 +54,14 @@ static void execute_use(const stmt_t *stmt, response_t *rs)
  */
 static void execute_createdb(const stmt_t *stmt, response_t *rs)
 {
-    timeseries_db_t *tsdb = tsdbmanager_get(stmt->create.db_name);
+    timeseries_db_t *tsdb = dbcontext_get(stmt->create.db_name);
     if (tsdb) {
         set_string_response(rs, 1, "Database '%s' already exists",
                             stmt->create.db_name);
         return;
     }
 
-    tsdb = tsdbmanager_add(stmt->create.db_name);
+    tsdb = dbcontext_add(stmt->create.db_name);
     if (!tsdb) {
         set_string_response(rs, 1, "Error creating '%s' database",
                             stmt->create.db_name);
@@ -85,7 +85,7 @@ static void execute_create(const stmt_t *stmt, response_t *rs)
 
     // Get the specified database or use active database
     if (stmt->create.db_name[0] != '\0') {
-        tsdb = tsdbmanager_get(stmt->create.db_name);
+        tsdb = dbcontext_get(stmt->create.db_name);
         if (!tsdb) {
             set_string_response(rs, 1, "Database '%s' not found",
                                 stmt->create.db_name);
@@ -94,7 +94,7 @@ static void execute_create(const stmt_t *stmt, response_t *rs)
         }
     }
 
-    tsdb = tsdbmanager_getactive();
+    tsdb = dbcontext_getactive();
     if (!tsdb) {
         set_string_response(rs, 1, "No active database");
 
@@ -150,7 +150,7 @@ static void execute_meta(const stmt_t *stmt, response_t *rs)
 static void execute_insert(const stmt_t *stmt, response_t *rs)
 {
     // Active database not supported yet
-    timeseries_db_t *tsdb = tsdbmanager_getactive();
+    timeseries_db_t *tsdb = dbcontext_getactive();
     if (!tsdb) {
         set_string_response(rs, 1,
                             "No database in the system, create one first");
@@ -197,7 +197,7 @@ static void execute_insert(const stmt_t *stmt, response_t *rs)
  */
 static void execute_select(const stmt_t *stmt, response_t *rs)
 {
-    timeseries_db_t *tsdb = tsdbmanager_getactive();
+    timeseries_db_t *tsdb = dbcontext_getactive();
     if (!tsdb) {
         set_string_response(rs, 1,
                             "No database in the system, create one first");

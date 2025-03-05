@@ -1,5 +1,5 @@
-#ifndef STATEMENT_H
-#define STATEMENT_H
+#ifndef STATEMENT_PARSE_H
+#define STATEMENT_PARSE_H
 
 #include <math.h>
 #include <stdbool.h>
@@ -220,7 +220,7 @@ typedef struct {
 } stmt_delete_t;
 
 // Define a pair (timestamp, value) for INSERT statements
-typedef struct {
+typedef struct stmt_record {
     int64_t timestamp;
     double_t value;
 } stmt_record_t;
@@ -302,7 +302,7 @@ typedef enum { META_DATABASES, META_TIMESERIES, META_UNKNOWN } meta_command_t;
 typedef stmt_create_t stmt_use_t;
 
 // Define a generic statement
-typedef struct {
+typedef struct stmt {
     stmt_type_t type;
     union {
         stmt_use_t use;

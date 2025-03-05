@@ -1,4 +1,4 @@
-#include "../src/statement.h"
+#include "../src/statement_parse.h"
 #include "test_helpers.h"
 #include "tests.h"
 #include <stdio.h>

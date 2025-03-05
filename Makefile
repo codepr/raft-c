@@ -12,23 +12,24 @@ CFLAGS=-Wall                                  \
        -Ilib
 LDFLAGS = -L. -lraft
 
-RAFT_C_SRC = src/timeutil.c    \
-             src/iomux.c       \
-             src/statement.c   \
-             src/tsdbmanager.c \
-             src/config.c      \
-             src/binary.c      \
-             src/storage.c     \
-             src/encoding.c    \
-             src/cluster.c     \
-             src/raft.c        \
-             src/hash.c        \
-             src/network.c     \
-             src/timeseries.c  \
-             src/partition.c   \
-             src/index.c       \
-             src/commitlog.c   \
-             src/wal.c         \
+RAFT_C_SRC = src/timeutil.c             \
+             src/iomux.c                \
+             src/statement_parse.c      \
+             src/statement_execute.c    \
+             src/dbcontext.c            \
+             src/config.c               \
+             src/binary.c               \
+             src/storage.c              \
+             src/encoding.c             \
+             src/cluster.c              \
+             src/raft.c                 \
+             src/hash.c                 \
+             src/network.c              \
+             src/timeseries.c           \
+             src/partition.c            \
+             src/index.c                \
+             src/commitlog.c            \
+             src/wal.c                  \
              src/server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)
 RAFT_C_EXEC = raft-c
@@ -39,30 +40,30 @@ RAFT_LIB_SOURCES = src/binary.c   \
                    src/raft.c
 RAFT_LIB_OBJECTS = $(RAFT_LIB_SOURCES:.c=.o)
 
-CLI_SRC = src/client.c      \
-          src/raftcli.c     \
-          src/network.c     \
-          src/encoding.c    \
-          src/binary.c      \
-          src/statement.c   \
+CLI_SRC = src/client.c            \
+          src/raftcli.c           \
+          src/network.c           \
+          src/encoding.c          \
+          src/binary.c            \
+          src/statement_parse.c   \
           src/timeutil.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 CLI_EXEC = raft-cli
 
-TEST_SRC = tests/tests.c           \
-           tests/test_helpers.c    \
-           tests/encoding_test.c   \
-           tests/statement_test.c  \
-           tests/timeseries_test.c \
-           src/encoding.c          \
-           src/statement.c         \
-           src/timeseries.c        \
-           src/timeutil.c          \
-           src/wal.c               \
-           src/storage.c           \
-           src/partition.c         \
-           src/binary.c            \
-           src/commitlog.c         \
+TEST_SRC = tests/tests.c                 \
+           tests/test_helpers.c          \
+           tests/encoding_test.c         \
+           tests/statement_test.c        \
+           tests/timeseries_test.c       \
+           src/encoding.c                \
+           src/statement_parse.c         \
+           src/timeseries.c              \
+           src/timeutil.c                \
+           src/wal.c                     \
+           src/storage.c                 \
+           src/partition.c               \
+           src/binary.c                  \
+           src/commitlog.c               \
            src/index.c
 TEST_OBJ = $(TEST_SRC:.c=.o)
 TEST_EXEC = raft-c-tests
