@@ -15,7 +15,7 @@
 #define LOG(level, level_str, fmt, ...)                                        \
     do {                                                                       \
         if (level >= LOG_LEVEL) {                                              \
-            fprintf(stderr, "%" PRIi64 " %s " fmt "%s", current_seconds(),     \
+            fprintf(stderr, "%li %s " fmt "%s", current_seconds(),             \
                     level_str __VA_OPT__(, ) __VA_ARGS__, "\n");               \
         }                                                                      \
         if (level == LL_CRITICAL)                                              \

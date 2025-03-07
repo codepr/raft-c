@@ -2,12 +2,13 @@
 #define TIMEUTIL_H
 
 #include <time.h>
+#include <unistd.h>
 
-long long current_seconds(void);
-long long current_micros(void);
+time_t current_seconds(void);
+useconds_t current_micros(void);
 int clocktime(struct timespec *ts);
 double timespec_seconds(struct timespec *ts);
-long long timespan_seconds(long long mul, const char *ts);
-long long datetime_seconds(const char *dt);
+time_t timespan_seconds(long long mul, const char *ts);
+time_t datetime_seconds(const char *datetime_str);
 
 #endif

@@ -6,22 +6,22 @@ static const struct {
     int mul;
 } units[4] = {{'s', 1}, {'m', 60}, {'h', 60 * 60}, {'d', 24 * 60 * 60}};
 
-long long current_micros(void)
+useconds_t current_micros(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
     // Converts the time to microseconds
-    return (long long)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
+    return (useconds_t)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
 }
 
-long long current_seconds(void)
+time_t current_seconds(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
     // Returns the time in seconds
-    return (long long)ts.tv_sec;
+    return ts.tv_sec;
 }
 
 int clocktime(struct timespec *ts)
@@ -34,9 +34,9 @@ double timespec_seconds(struct timespec *ts)
     return (double)ts->tv_sec + (double)ts->tv_nsec * 1.0e-9;
 }
 
-long long timespan_seconds(long long mul, const char *ts)
+time_t timespan_seconds(long long mul, const char *ts)
 {
-    long long value = -1LL;
+    time_t value = -1LL;
 
     if (strlen(ts) == 2) {
         if (strncmp(ts, "ns", strlen(ts)) == 0) {
@@ -57,8 +57,31 @@ long long timespan_seconds(long long mul, const char *ts)
     return value;
 }
 
-long long datetime_seconds(const char *dt)
+time_t datetime_seconds(const char *datetime_str)
 {
-    // TODO
+    struct tm time_info = {0};
+    char format[32];
+
+    // Check if the string contains time component
+    if (strchr(datetime_str, ' ') != NULL) {
+        // Format: "2025-01-08 12:55:00"
+        strncpy(format, "%Y-%m-%d %H:%M:%S", sizeof(format));
+    } else {
+        // Format: "2025-01-08"
+        strncpy(format, "%Y-%m-%d", sizeof(format));
+        // Set default time to midnight
+        time_info.tm_hour = 0;
+        time_info.tm_min  = 0;
+        time_info.tm_sec  = 0;
+    }
+
+    // Parse the string according to the determined format
+    if (strptime(datetime_str, format, &time_info) == NULL)
+        return -1;
+
+    // Convert to Unix timestamp
+    time_t unix_time = mktime(&time_info);
+
+    return unix_time;
     return -1;
 }

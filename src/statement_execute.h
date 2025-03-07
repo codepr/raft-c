@@ -4,11 +4,14 @@
 #include "statement_parse.h"
 #include <stdlib.h>
 
-#define ERROR_MESSAGE_SIZE 256
+#define MESSAGE_SIZE 256
 
 // Execution result types
 typedef enum {
-    EXEC_SUCCESS,
+    EXEC_SUCCESS_STRING,
+    EXEC_SUCCESS_ARRAY,
+    EXEC_ERROR_UNSUPPORTED,
+    EXEC_ERROR_EMPTY_RESULTSET,
     EXEC_ERROR_DB_NOT_FOUND,
     EXEC_ERROR_TS_NOT_FOUND,
     EXEC_ERROR_TS_NOT_CREATED,
@@ -23,7 +26,7 @@ typedef enum {
 
 typedef struct {
     execute_result_code_t code;
-    char error_message[ERROR_MESSAGE_SIZE];
+    char message[MESSAGE_SIZE];
 
     // For SELECT statements
     struct {
