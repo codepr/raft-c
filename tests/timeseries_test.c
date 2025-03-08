@@ -18,7 +18,7 @@ static int scan_entire_timeseries_test(timeseries_t *ts)
     record_array_t out = {0};
 
     if (ts_scan(ts, &out) < 0) {
-        fprintf(stderr, "FAIL: ts_scan failed\n");
+        fprintf(stderr, " FAIL: ts_scan failed\n");
         return -1;
     }
 
@@ -58,7 +58,7 @@ static int scan_entire_timeseries_out_of_order_test(timeseries_t *ts)
         value       = (double_t)(rand() % cases);
 
         if (ts_insert(ts, newts, value) < 0) {
-            fprintf(stderr, "FAIL: ts_insert failed for record {%llu, %.2f}\n",
+            fprintf(stderr, " FAIL: ts_insert failed for record {%llu, %.2f}\n",
                     timestamps[index], value);
             rc = -1;
             goto exit;
@@ -66,7 +66,7 @@ static int scan_entire_timeseries_out_of_order_test(timeseries_t *ts)
     }
 
     if (ts_scan(ts, &out) < 0) {
-        fprintf(stderr, "FAIL: ts_scan failed\n");
+        fprintf(stderr, " FAIL: ts_scan failed\n");
         return -1;
     }
 
@@ -107,7 +107,7 @@ static int find_single_record_test(timeseries_t *ts)
         index = rand() % (POINTSNR - 1);
 
         if (ts_find(ts, timestamps[index], &r) < 0) {
-            fprintf(stderr, "FAIL: ts_find failed for timestamp %llu\n",
+            fprintf(stderr, " FAIL: ts_find failed for timestamp %llu\n",
                     timestamps[index]);
             return -1;
         }
@@ -164,7 +164,7 @@ static int find_range_records_test(timeseries_t *ts)
         end   = rand() % ((POINTSNR - 1) + 1 - start) + start;
 
         if (ts_range(ts, timestamps[start], timestamps[end], &out) < 0) {
-            fprintf(stderr, "FAIL: ts_range failed for range [%llu - %llu]\n",
+            fprintf(stderr, " FAIL: ts_range failed for range [%llu - %llu]\n",
                     timestamps[start], timestamps[end]);
             rc = -1;
             goto exit;
@@ -213,13 +213,13 @@ static int insert_out_of_order_test(timeseries_t *ts)
         value       = (double_t)(rand() % cases);
 
         if (ts_insert(ts, newts, value) < 0) {
-            fprintf(stderr, "FAIL: ts_insert failed for record {%llu, %.2f}\n",
+            fprintf(stderr, " FAIL: ts_insert failed for record {%llu, %.2f}\n",
                     timestamps[index], value);
             rc = -1;
             goto exit;
         }
         if (ts_find(ts, newts, &r) < 0) {
-            fprintf(stderr, "FAIL: ts_find failed for timestamp %llu\n",
+            fprintf(stderr, " FAIL: ts_find failed for timestamp %llu\n",
                     timestamps[index]);
             rc = -1;
             goto exit;
@@ -260,12 +260,12 @@ static int insert_out_of_bounds_test(timeseries_t *ts)
         value       = (double_t)(rand() % cases);
 
         if (ts_insert(ts, newts, value) < 0) {
-            fprintf(stderr, "FAIL: ts_insert failed for record {%llu, %.2f}\n",
+            fprintf(stderr, " FAIL: ts_insert failed for record {%llu, %.2f}\n",
                     timestamps[index], value);
             return -1;
         }
         if (ts_find(ts, newts, &r) < 0) {
-            fprintf(stderr, "FAIL: ts_find failed for timestamp %llu\n",
+            fprintf(stderr, " FAIL: ts_find failed for timestamp %llu\n",
                     timestamps[index]);
             return -1;
         }

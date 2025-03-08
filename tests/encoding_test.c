@@ -24,10 +24,10 @@ static int test_encode_request_simple(void)
     uint8_t expected[] = {'$', '9', '\r', '\n', 'C', 'R',  'E', 'A',
                           'T', 'E', ' ',  'd',  'b', '\r', '\n'};
 
-    ASSERT_TRUE(result > 0, "FAIL: encoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
     ASSERT_EQ(sizeof(expected), result);
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
-                "FAIL: encoded buffer doesn't match expected\n");
+                " FAIL: encoded buffer doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -45,10 +45,10 @@ static int test_encode_request_empty(void)
     // Expected output: $0\r\n\r\n
     uint8_t expected[]              = {'$', '0', '\r', '\n', '\r', '\n'};
 
-    ASSERT_TRUE(result > 0, "FAIL: encoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
     ASSERT_EQ(sizeof(expected), result);
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
-                "FAIL: encoded buffer doesn't match expected\n");
+                " FAIL: encoded buffer doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -65,11 +65,11 @@ static int test_decode_request_simple(void)
 
     ssize_t result = decode_request(data, &req);
 
-    ASSERT_TRUE(result > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(9, req.length);
     ASSERT_TRUE(strcmp("CREATE db", req.query) == 0,
-                "FAIL: query doesn't match expecation\n");
+                " FAIL: query doesn't match expecation\n");
 
     TEST_FOOTER;
     return 0;
@@ -142,10 +142,10 @@ static int test_encode_string_response(void)
     // Expected output: $2\r\nOK\r\n
     uint8_t expected[] = {'$', '2', '\r', '\n', 'O', 'K', '\r', '\n'};
 
-    ASSERT_TRUE(result > 0, "FAIL: encoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
     ASSERT_EQ(sizeof(expected), result);
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
-                "FAIL: encoded buffer doesn't match expected\n");
+                " FAIL: encoded buffer doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -169,10 +169,10 @@ static int test_encode_error_response(void)
                           'r', ':', ' ', 'k',  'e',  'y', ' ', 'n',  'o',
                           't', ' ', 'f', 'o',  'u',  'n', 'd', '\r', '\n'};
 
-    ASSERT_TRUE(result > 0, "FAIL: encoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
     ASSERT_EQ(sizeof(expected), result);
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
-                "FAIL: encoded buffer doesn't match expected\n");
+                " FAIL: encoded buffer doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -201,11 +201,12 @@ static int test_encode_array_response(void)
                           '7',  '8',  '9',  '1',  '\r', '\n', ';',  '4',  '3',
                           '.',  '7',  '0',  '0',  '0',  '0',  '0',  '\r', '\n'};
 
-    ASSERT_TRUE(result > 0, "FAIL: encoding failed\n");
-    ASSERT_TRUE(buffer[0] == '#', "FAIL: array response should start with #\n");
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_TRUE(buffer[0] == '#',
+                " FAIL: array response should start with #\n");
     ASSERT_EQ(sizeof(expected), result);
     ASSERT_TRUE(memcmp(expected, buffer, sizeof(expected)) == 0,
-                "FAIL: encoding doesn't match expected\n");
+                " FAIL: encoding doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -225,10 +226,10 @@ static int test_encode_empty_array_response(void)
     // Expected output: #0\r\n
     uint8_t expected[]              = {'#', '0', '\r', '\n'};
 
-    ASSERT_TRUE(result > 0, "FAIL: encoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
     ASSERT_EQ(sizeof(expected), result);
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
-                "FAIL: encoded buffer doesn't match expected\n");
+                " FAIL: encoded buffer doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -244,13 +245,13 @@ static int test_decode_string_response(void)
 
     ssize_t result  = decode_response(data, &resp);
 
-    ASSERT_TRUE(result > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(RT_STRING, resp.type);
     ASSERT_EQ(0, resp.string_response.rc);
     ASSERT_EQ(2, resp.string_response.length);
     ASSERT_TRUE(strcmp("OK", resp.string_response.message) == 0,
-                "FAIL: message doesn't match expected\n");
+                " FAIL: message doesn't match expected\n");
 
     TEST_FOOTER;
     return 0;
@@ -267,13 +268,13 @@ static int test_decode_error_response(void)
 
     ssize_t result  = decode_response(data, &resp);
 
-    ASSERT_TRUE(result > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(RT_STRING, resp.type);
     ASSERT_EQ(1, resp.string_response.rc);
     ASSERT_EQ(5, resp.string_response.length);
     ASSERT_TRUE(strcmp("ERROR", resp.string_response.message) == 0,
-                "FAIL: message doesn't match input\n");
+                " FAIL: message doesn't match input\n");
 
     TEST_FOOTER;
     return 0;
@@ -294,16 +295,16 @@ static int test_decode_array_response(void)
 
     ssize_t result  = decode_response(data, &resp);
 
-    ASSERT_TRUE(result > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(RT_ARRAY, resp.type);
     ASSERT_EQ(2, resp.array_response.length);
     ASSERT_EQ(1234567890, resp.array_response.records[0].timestamp);
     ASSERT_EQ(1234567891, resp.array_response.records[1].timestamp);
     ASSERT_TRUE(resp.array_response.records[0].value == 42.5,
-                "FAIL: first value doesn't match\n");
+                " FAIL: first value doesn't match\n");
     ASSERT_TRUE(resp.array_response.records[1].value == 43.7,
-                "FAIL: second value doesn't match\n");
+                " FAIL: second value doesn't match\n");
 
     // Free allocated memory
     free_response(&resp);
@@ -323,12 +324,12 @@ static int test_decode_empty_array_response(void)
 
     ssize_t result  = decode_response(data, &resp);
 
-    ASSERT_TRUE(result > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(RT_ARRAY, resp.type);
     ASSERT_EQ(0, resp.array_response.length);
     ASSERT_TRUE(resp.array_response.records == NULL,
-                "FAIL: records should be NULL\n");
+                " FAIL: records should be NULL\n");
 
     // No need to free since records is NULL
 
@@ -378,9 +379,9 @@ static int test_free_response(void)
         // Can't directly test freed memory, but we can check that the pointer
         // is NULL
         ASSERT_TRUE(resp.array_response.records == NULL,
-                    "FAIL: records pointer should be NULL after free\n");
+                    " FAIL: records pointer should be NULL after free\n");
     } else {
-        fprintf(stderr, "FAIL: failed to allocate memory\n");
+        fprintf(stderr, " FAIL: failed to allocate memory\n");
         return -1;
     }
 
@@ -401,17 +402,17 @@ static int test_request_round_trip(void)
     // Encode
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
     ssize_t encoded_length          = encode_request(&req_original, buffer);
-    ASSERT_TRUE(encoded_length > 0, "FAIL: encoding failed\n");
+    ASSERT_TRUE(encoded_length > 0, " FAIL: encoding failed\n");
 
     // Decode
     request_t req_decoded  = {0};
 
     ssize_t decoded_length = decode_request(buffer, &req_decoded);
-    ASSERT_TRUE(decoded_length > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(decoded_length > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(encoded_length, decoded_length);
     ASSERT_EQ(req_original.length, req_decoded.length);
     ASSERT_TRUE(strcmp(req_original.query, req_decoded.query) == 0,
-                "FAIL: original and decoded queries don't match\n");
+                " FAIL: original and decoded queries don't match\n");
 
     TEST_FOOTER;
     return 0;
@@ -432,13 +433,13 @@ static int test_string_response_round_trip(void)
     // Encode
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
     ssize_t encoded_length          = encode_response(&resp_original, buffer);
-    ASSERT_TRUE(encoded_length > 0, "FAIL: Encoding failed\n");
+    ASSERT_TRUE(encoded_length > 0, " FAIL: Encoding failed\n");
 
     // Decode
     response_t resp_decoded = {0};
 
     ssize_t decoded_length  = decode_response(buffer, &resp_decoded);
-    ASSERT_TRUE(decoded_length > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(decoded_length > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(encoded_length, decoded_length);
     ASSERT_EQ(resp_original.type, resp_decoded.type);
     ASSERT_EQ(resp_original.string_response.rc,
@@ -447,7 +448,7 @@ static int test_string_response_round_trip(void)
               resp_decoded.string_response.length);
     ASSERT_TRUE(strcmp(resp_original.string_response.message,
                        resp_decoded.string_response.message) == 0,
-                "FAIL: original and decoded messages don't match\n");
+                " FAIL: original and decoded messages don't match\n");
 
     TEST_FOOTER;
     return 0;
@@ -475,7 +476,7 @@ static int test_array_response_round_trip(void)
     response_t resp_decoded = {0};
 
     ssize_t decoded_length  = decode_response(buffer, &resp_decoded);
-    ASSERT_TRUE(decoded_length > 0, "FAIL: decoding failed\n");
+    ASSERT_TRUE(decoded_length > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(encoded_length, decoded_length);
     ASSERT_EQ(resp_original.type, resp_decoded.type);
     ASSERT_EQ(resp_original.array_response.length,
@@ -489,7 +490,7 @@ static int test_array_response_round_trip(void)
         ASSERT_TRUE(
             fequals(resp_original.array_response.records[i].value,
                     resp_decoded.array_response.records[i].value),
-            "FAIL: original and decoded values don't be approximately equal");
+            " FAIL: original and decoded values don't be approximately equal");
     }
 
     // Clean up

@@ -42,11 +42,11 @@ static int parse_create_ts_retention_duplication_test(void)
     ASSERT_EQ(stmt->type, STMT_CREATE);
     ASSERT_SEQ(stmt->create.ts_name, "ts-test");
     ASSERT_TRUE(stmt->create.has_retention,
-                "FAIL: has_retention should be true\n");
+                " FAIL: has_retention should be true\n");
     ASSERT_EQ(stmt->create.retention.timespan.value, 3);
     ASSERT_SEQ(stmt->create.retention.timespan.unit, "d");
     ASSERT_TRUE(stmt->create.has_duplication,
-                "FAIL: has_duplication should be true\n");
+                " FAIL: has_duplication should be true\n");
     ASSERT_SEQ(stmt->create.duplication, "ignore");
 
     stmt_free(stmt);
@@ -116,7 +116,7 @@ static int parse_insert_multi_test(void)
                                timestamp, value);
 
         if (written < 0 || (size_t)written >= remaining) {
-            fprintf(stderr, "FAIL: Query buffer too small\n");
+            fprintf(stderr, " FAIL: Query buffer too small\n");
             break;
         }
 
@@ -200,7 +200,7 @@ static int parse_select_test(void)
                               "test-value < 16.2 SAMPLE BY 4d");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
@@ -235,7 +235,7 @@ static int parse_select_fn_test(void)
                    "39238293 ");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
@@ -264,7 +264,7 @@ static int parse_select_now_fn_test(void)
                    "39238293 ");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
@@ -293,7 +293,7 @@ static int parse_select_date_test(void)
         "'2025-05-01' ");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
@@ -322,7 +322,7 @@ static int parse_select_limit_test(void)
         "'2025-05-01' LIMIT 20");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
@@ -351,7 +351,7 @@ static int parse_select_where_test(void)
                               "3.14159 AND timestamp < 2.5e-3");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
@@ -385,7 +385,7 @@ static int parse_select_operation_test(void)
                    "'2025-05-01' LIMIT 20");
 
     if (!stmt) {
-        fprintf(stderr, "FAIL: parsing failed\n");
+        fprintf(stderr, " FAIL: parsing failed\n");
         rc = -1;
         goto exit;
     }
