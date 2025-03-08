@@ -39,8 +39,10 @@ typedef struct {
     int64_t records_affected;  // For INSERT/DELETE operations
 } execute_stmt_result_t;
 
+typedef struct tcc tcc_t;
+
 // Main execution function
-execute_stmt_result_t stmt_execute(const stmt_t *stmt);
+execute_stmt_result_t stmt_execute(tcc_t *ctx, const stmt_t *stmt);
 
 // Helper functions for statement preparation
 int64_t stmt_resolve_timestamp(const stmt_timeunit_t *timeunit);

@@ -855,6 +855,97 @@ int ts_scan(const timeseries_t *ts, record_array_t *out)
     return 0;
 }
 
+/**
+ * Retrieves all the timespace from the paritions and both the head and prev
+ * in-memory records. It accepts a callback function to process the records in
+ * batches so to avoid clogging the memory by restricting the number of records
+ * for each iteration.
+ */
+int ts_stream(const timeseries_t *ts, ts_record_batch_callback_t callback,
+              void *userdata)
+{
+
+    if (!ts || !callback)
+        return TS_E_NULL_POINTER;
+
+    // Temporary buffer for batching records
+    record_array_t batch    = {0};
+    const size_t BATCH_SIZE = 1000; // Adjust based on your expected record size
+
+    int ret                 = 0;
+
+    // Process each partition
+    for (size_t i = 0; i < ts->partition_nr; i++) {
+        const partition_t *part = &ts->partitions[i];
+
+        // Fetch a batch of records from the partition
+        uint64_t endts          = part->end_ts;
+        uint64_t start_ts       = part->start_ts;
+        do {
+            da_reset(&batch);
+
+            // Fill batch with next chunk of records
+            if (fetch_records_from_partition(part, start_ts, endts, &batch) <
+                0) {
+                ret = -1;
+                goto cleanup;
+            }
+
+            if (batch.length > 0) {
+                endts    = da_back(&batch).timestamp;
+                start_ts = batch.items[0].timestamp;
+            }
+
+            // Process each record in the batch
+            if (callback(&batch, userdata) != 0) {
+                ret = -1;
+                goto cleanup;
+            }
+
+            if (batch.length < BATCH_SIZE) // End of partition
+                break;
+        } while (endts < part->end_ts);
+    }
+
+    da_reset(&batch);
+
+    if (ts->prev->base_offset != 0) {
+        uint64_t endts =
+            da_back(&ts->prev->points[ts->prev->max_index]).timestamp;
+        uint64_t start_ts = ts->prev->start_ts;
+
+        do {
+            da_reset(&batch);
+            ts_chunk_range(ts->prev, start_ts, endts, &batch);
+            if (batch.length > 0) {
+                endts    = da_back(&batch).timestamp;
+                start_ts = batch.items[0].timestamp;
+            }
+        } while (endts < ts->prev->end_ts);
+    }
+
+    // Then add from the current chunk if it exists
+    if (ts->head->base_offset != 0) {
+
+        uint64_t endts =
+            da_back(&ts->head->points[ts->head->max_index]).timestamp;
+        uint64_t start_ts = ts->head->start_ts;
+
+        do {
+            da_reset(&batch);
+            ts_chunk_range(ts->head, start_ts, endts, &batch);
+            if (batch.length > 0) {
+                endts    = da_back(&batch).timestamp;
+                start_ts = batch.items[0].timestamp;
+            }
+        } while (endts < ts->head->end_ts);
+    }
+
+cleanup:
+    da_free(&batch);
+    return ret;
+}
+
 void ts_print(const timeseries_t *ts)
 {
     for (int i = 0; i < TS_CHUNK_SIZE; ++i) {

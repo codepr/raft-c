@@ -1,4 +1,5 @@
 #include "server.h"
+#include "buffer.h"
 #include "cluster.h"
 #include "config.h"
 #include "encoding.h"
@@ -7,6 +8,7 @@
 #include "network.h"
 #include "statement_execute.h"
 #include "statement_parse.h"
+#include "tcc.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -305,7 +307,7 @@
 //     set_string_response(rs, 1, "Error: Unsupported query type");
 // }
 
-static response_t execute_statement(const stmt_t *stmt)
+static response_t execute_statement(tcc_t *ctx, const stmt_t *stmt)
 {
     response_t rs = {0};
     if (!stmt) {
@@ -318,7 +320,7 @@ static response_t execute_statement(const stmt_t *stmt)
         goto exit;
     }
 
-    execute_stmt_result_t exec_result = stmt_execute(stmt);
+    execute_stmt_result_t exec_result = stmt_execute(ctx, stmt);
 
     switch (exec_result.code) {
     case EXEC_SUCCESS_STRING:
@@ -385,7 +387,7 @@ exit:
     return rs;
 }
 
-static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
+static ssize_t handle_client(tcc_t *ctx)
 {
     request_t rq                 = {0};
     response_t rs                = {0};
@@ -394,13 +396,14 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
     uint8_t response_buf[BUFSIZ] = {0};
     stmt_t *stmt                 = {0};
 
-    bytes_read                   = decode_request(buf, &rq);
+    int err                      = tcc_read_buffer(ctx);
+    if (err < 0)
+        return -1;
+
+    bytes_read = decode_request(ctx->buffer->data, &rq);
     if (bytes_read < 0) {
         log_error("Failed to decode client request: %zd", bytes_read);
-        rs.type               = RT_STRING;
-        rs.string_response.rc = 1;
-        strncpy(rs.string_response.message, "Err", 4);
-        rs.string_response.length = 4;
+        set_string_response(&rs, 1, "Failed to decode request");
         goto exit;
     }
 
@@ -408,7 +411,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
     // Parse into Statement
     stmt          = stmt_parse(rq.query);
     // Execute it
-    rs            = execute_statement(stmt);
+    rs            = execute_statement(ctx, stmt);
 
     // Encode the response
 
@@ -423,7 +426,7 @@ static ssize_t handle_client(int fd, iomux_t *iomux, const uint8_t buf[BUFSIZ])
     }
 
     // Send the response back to the client
-    ssize_t sent = send_nonblocking(fd, response_buf, bytes_written);
+    ssize_t sent = send_nonblocking(ctx->fd, response_buf, bytes_written);
     if (sent != bytes_written) {
         log_error("Failed to send complete response: %zd/%zd", sent,
                   bytes_written);
@@ -445,42 +448,40 @@ exit:
     return bytes_read;
 }
 
-static ssize_t handle_peer(int fd, iomux_t *iomux, uint8_t buf[BUFSIZ])
+static ssize_t handle_peer(tcc_t *ctx)
 {
-    cluster_message_t cm = {0};
-    ssize_t n            = recv(fd, buf, BUFSIZ, 0);
-    if (n <= 0)
-        return n;
 
-    cluster_message_read(buf, &cm);
-
-    switch (cm.type) {
-    case CM_CLUSTER_JOIN:
-        break;
-    case CM_CLUSTER_DATA:
-        cluster_submit(&cm);
-        break;
-    }
-
-    return n;
+    int err = tcc_read_buffer(ctx);
+    if (err < 0)
+        return -1;
+    return 0;
+    // cluster_message_t cm = {0};
+    // ssize_t n            = recv(ctx->fd, buf, BUFSIZ, 0);
+    // if (n <= 0)
+    //     return n;
+    //
+    // cluster_message_read(buf, &cm);
+    //
+    // switch (cm.type) {
+    // case CM_CLUSTER_JOIN:
+    //     break;
+    // case CM_CLUSTER_DATA:
+    //     cluster_submit(&cm);
+    //     break;
+    // }
+    //
+    // return n;
 }
 
 static int server_start(int serverfd, int clusterfd)
 {
-    uint8_t buf[BUFSIZ]        = {0};
-    int clientfds[FD_SETSIZE]  = {0};
-    int clusterfds[FD_SETSIZE] = {0};
-    int numevents              = 0;
+    tcc_t *clientfds[FD_SETSIZE]  = {NULL};
+    tcc_t *clusterfds[FD_SETSIZE] = {NULL};
+    int numevents                 = 0;
 
-    iomux_t *iomux             = iomux_create();
+    iomux_t *iomux                = iomux_create();
     if (!iomux)
         return -1;
-
-    // Initialize client_fds array
-    for (int i = 0; i < FD_SETSIZE; i++) {
-        clientfds[i]  = -1;
-        clusterfds[i] = -1;
-    }
 
     iomux_add(iomux, serverfd, IOMUX_READ);
 
@@ -488,8 +489,6 @@ static int server_start(int serverfd, int clusterfd)
         iomux_add(iomux, clusterfd, IOMUX_READ);
 
     while (1) {
-        memset(buf, 0x00, sizeof(buf));
-
         numevents = iomux_wait(iomux, -1);
         if (numevents < 0)
             log_critical("iomux error: %s", strerror(errno));
@@ -505,12 +504,14 @@ static int server_start(int serverfd, int clusterfd)
                     continue;
                 }
 
-                if (clientfds[clientfd] != -1) {
+                if (clientfds[clientfd] != NULL) {
                     log_warning("client connecting on an open socket");
                     continue;
                 }
 
-                clientfds[clientfd] = clientfd;
+                clientfds[clientfd] = tcc_create(clientfd, 1);
+                if (!clientfds[clientfd])
+                    log_critical("Out of memory on client connection");
 
                 log_info("New client connected");
                 iomux_add(iomux, clientfd, IOMUX_READ);
@@ -523,46 +524,45 @@ static int server_start(int serverfd, int clusterfd)
                     continue;
                 }
 
-                if (clusterfds[clusterfd] != -1) {
+                if (clusterfds[clusterfd] != NULL) {
                     log_warning("peer connecting on an open socket");
                     continue;
                 }
 
-                clusterfds[clusterfd] = clusterfd;
+                clusterfds[clusterfd] = tcc_create(clusterfd, 1);
+                if (!clusterfds[clusterfd])
+                    log_critical("Out of memory on peer connection");
 
                 iomux_add(iomux, clusterfd, IOMUX_READ);
-            } else if (clientfds[fd] != -1) {
-                ssize_t n = recv_nonblocking(fd, buf, sizeof(buf));
-                if (n <= 0) {
-                    clientfds[fd] = -1;
-                    close(fd);
-                    log_info("Client disconnected\n");
-                    continue;
-                }
-                ssize_t err = handle_client(fd, iomux, buf);
+            } else if (clientfds[fd] != NULL) {
+                buffer_clear(clientfds[fd]->buffer);
+                int err = handle_client(clientfds[fd]);
                 if (err <= 0) {
+                    tcc_free(clientfds[fd]);
+                    clientfds[fd] = NULL;
                     close(fd);
-                    clientfds[fd] = -1;
                     log_info("Client disconnected");
                     continue;
                 }
-            } else if (clusterfds[fd] != -1) {
-                ssize_t n = recv_nonblocking(fd, buf, sizeof(buf));
-                if (n <= 0) {
-                    clientfds[fd] = -1;
-                    close(fd);
-                    log_info("Client disconnected\n");
-                    continue;
-                }
-                ssize_t err = handle_peer(fd, iomux, buf);
+            } else if (clusterfds[fd] != NULL) {
+                buffer_clear(clusterfds[fd]->buffer);
+                int err = handle_peer(clusterfds[fd]);
                 if (err <= 0) {
+                    tcc_free(clusterfds[fd]);
                     close(fd);
-                    clusterfds[fd] = -1;
+                    clusterfds[fd] = NULL;
                     log_info("Peer disconnected");
                     continue;
                 }
             }
         }
+    }
+
+    for (int i = 0; i < FD_SETSIZE; ++i) {
+        if (clientfds[i])
+            tcc_free(clientfds[i]);
+        if (clusterfds[i])
+            tcc_free(clusterfds[i]);
     }
 
     iomux_free(iomux);

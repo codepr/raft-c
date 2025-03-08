@@ -14,8 +14,11 @@ typedef struct tcc {
     size_t records_sent; // Counter for sent records
     size_t batch_size;   // Number of records to batch before flushing
     buffer_t *buffer;    // Input/Output buffer
+    int nonblocking;
 } tcc_t;
 
+tcc_t *tcc_create(int fd, int nonblocking);
+void tcc_free(tcc_t *tcc);
 int tcc_read_buffer(tcc_t *ctx);
 int tcc_flush_buffer(tcc_t *ctx);
 

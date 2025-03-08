@@ -160,7 +160,7 @@ ssize_t send_nonblocking(int fd, const unsigned char *buf, size_t len)
     while (total < len) {
         n = send(fd, buf + total, bytesleft, MSG_NOSIGNAL);
         if (n == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 break;
             else
                 goto err;
@@ -185,7 +185,7 @@ ssize_t recv_nonblocking(int fd, unsigned char *buf, size_t len)
     while (total < len) {
         if ((n = recv(fd, buf, len - total, 0)) < 0) {
             total = total == 0 ? -1 : total;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 break;
             else
                 goto err;

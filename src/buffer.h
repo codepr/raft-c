@@ -46,7 +46,9 @@ size_t buffer_remaining_read(const buffer_t *buf);
 size_t buffer_remaining_write(const buffer_t *buf);
 
 // Network I/O integration
-buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, size_t max_length);
-buffer_error_t buffer_write_to_fd(buffer_t *buf, int fd, size_t max_length);
+buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, int nonblocking,
+                                   size_t max_length);
+buffer_error_t buffer_write_to_fd(buffer_t *buf, int fd, int nonblocking,
+                                  size_t max_length);
 
 #endif

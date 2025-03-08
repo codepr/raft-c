@@ -107,6 +107,9 @@ typedef struct timeseries {
     ts_opts_t opts;
 } timeseries_t;
 
+typedef int (*ts_record_batch_callback_t)(const record_array_t *ra,
+                                          void *userdata);
+
 extern int ts_init(timeseries_t *ts);
 
 extern void ts_close(timeseries_t *ts);
@@ -119,6 +122,9 @@ extern int ts_range(const timeseries_t *ts, uint64_t t0, uint64_t t1,
                     record_array_t *out);
 
 extern int ts_scan(const timeseries_t *ts, record_array_t *out);
+
+extern int ts_stream(const timeseries_t *ts,
+                     ts_record_batch_callback_t callback, void *userdata);
 
 extern void ts_print(const timeseries_t *ts);
 

@@ -1,5 +1,8 @@
 #include "statement_execute.h"
+#include "binary.h"
+#include "buffer.h"
 #include "dbcontext.h"
+#include "tcc.h"
 #include "timeutil.h"
 #include <inttypes.h>
 
@@ -321,7 +324,59 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
     return result;
 }
 
-static execute_stmt_result_t execute_select(const stmt_t *stmt)
+static int stream_callback(const record_array_t *ra, void *user_data)
+{
+    tcc_t *ctx = user_data;
+    if (!ctx || !ra)
+        return TS_E_NULL_POINTER;
+
+    // If an error occurred previously, stop processing
+    if (ctx->error_code != 0)
+        return ctx->error_code;
+
+    // Format varies by protocol version
+    size_t bytes_needed;
+
+    // Protocol v1: 8 bytes timestamp + 8 bytes value
+    bytes_needed = 16;
+
+    // Check if we need to flush the buffer
+    if (ctx->buffer->size - ctx->buffer->read_pos < bytes_needed) {
+        if (tcc_flush_buffer(ctx) != 0) {
+            // TODO add proper errors
+            ctx->error_code = -1;
+            return -1;
+        }
+    }
+
+    // Pack the record into the buffer
+    for (size_t i = 0; i < ra->length; ++i) {
+
+        // uint64_t ts  = htobe64(record->timestamp); // Convert to network byte
+        // order double value = record->value;
+
+        // memcpy(ctx->buffer + ctx->buffer_used, &ts, sizeof(ts));
+        // ctx->buffer_used += sizeof(ts);
+        //
+        // memcpy(ctx->buffer + ctx->buffer_used, &value, sizeof(value));
+        // ctx->buffer_used += sizeof(value);
+
+        // Count records sent
+        ctx->records_sent++;
+    }
+
+    // Periodically flush based on batch size
+    // if (ctx->records_sent % ctx->batch_size == 0) {
+    //     if (flush_tcp_buffer(ctx) != 0) {
+    //         ctx->error_code = TS_E_NETWORK;
+    //         return TS_E_NETWORK;
+    //     }
+    // }
+
+    return 0;
+}
+
+static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
 {
     execute_stmt_result_t result = {0};
 
@@ -341,32 +396,34 @@ static execute_stmt_result_t execute_select(const stmt_t *stmt)
     }
 
     // Query data based on select mask
-    // if (stmt->select.flags & QF_BASE) {
-    //     // Single point query
-    //     record_t record;
-    //     if (ts_find(ts, stmt->select.timeunit.tsinterval.start, &record) ==
-    //     0) {
-    //         // Prepare array response with single record
-    //         rs->type                  = RT_ARRAY;
-    //         rs->array_response.length = 1;
-    //         rs->array_response.records =
-    //             malloc(sizeof(*rs->array_response.records));
-    //         if (!rs->array_response.records) {
-    //             set_string_response(rs, 1, "Error: Memory allocation
-    //             failed");
-    //
-    //             return;
-    //         }
-    //         rs->array_response.records[0].timestamp = record.timestamp;
-    //         rs->array_response.records[0].value     = record.value;
-    //
-    //         return;
-    //     }
-    //     set_string_response(rs, 1,
-    //                         "Error: Point not found at timestamp %" PRIu64,
-    //                         stmt->select.timeunit.tsinterval.start);
-    //     return;
-    // }
+    if (stmt->select.flags & QF_BASE) {
+        ts_stream(ts, stream_callback, ctx);
+        //     // Single point query
+        //     record_t record;
+        //     if (ts_find(ts, stmt->select.timeunit.tsinterval.start, &record)
+        //     == 0) {
+        //         // Prepare array response with single record
+        //         rs->type                  = RT_ARRAY;
+        //         rs->array_response.length = 1;
+        //         rs->array_response.records =
+        //             malloc(sizeof(*rs->array_response.records));
+        //         if (!rs->array_response.records) {
+        //             set_string_response(rs, 1, "Error: Memory allocation
+        //             failed");
+        //
+        //             return;
+        //         }
+        //         rs->array_response.records[0].timestamp = record.timestamp;
+        //         rs->array_response.records[0].value     = record.value;
+        //
+        //         return;
+        //     }
+        //     set_string_response(rs, 1,
+        //                         "Error: Point not found at timestamp %"
+        //                         PRIu64,
+        //                         stmt->select.timeunit.tsinterval.start);
+        //     return;
+    }
 
     if (stmt->select.flags & QF_RNGE) {
         return execute_select_range(stmt, ts);
@@ -394,7 +451,7 @@ static execute_stmt_result_t execute_meta(const stmt_t *stmt)
 /**
  * Main execution function, handle each query
  */
-execute_stmt_result_t stmt_execute(const stmt_t *stmt)
+execute_stmt_result_t stmt_execute(tcc_t *ctx, const stmt_t *stmt)
 {
     execute_stmt_result_t result = {0};
 
@@ -417,7 +474,7 @@ execute_stmt_result_t stmt_execute(const stmt_t *stmt)
         result = execute_insert(stmt);
         break;
     case STMT_SELECT:
-        result = execute_select(stmt);
+        result = execute_select(ctx, stmt);
         break;
     case STMT_DELETE:
         result = execute_delete(stmt);

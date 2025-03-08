@@ -1,4 +1,5 @@
 #include "buffer.h"
+#include "network.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,16 +201,13 @@ size_t buffer_remaining_write(const buffer_t *buf)
     return buf->capacity - buf->write_pos;
 }
 
-buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, size_t max_length)
+buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, int nonblocking,
+                                   size_t max_length)
 {
     if (!buf)
         return BUFFER_ERROR_NULL;
     if (fd < 0)
         return BUFFER_ERROR_IO;
-
-    if (max_length == 0) {
-        max_length = buf->capacity - buf->write_pos;
-    }
 
     if (max_length == 0) {
         buffer_error_t err = buffer_ensure_capacity(buf, 1024);
@@ -218,12 +216,16 @@ buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, size_t max_length)
         max_length = buf->capacity - buf->write_pos;
     }
 
-    ssize_t bytes_read = read(fd, buf->data + buf->write_pos, max_length);
+    ssize_t bytes_read = 0;
+
+    if (nonblocking) {
+        bytes_read =
+            recv_nonblocking(fd, buf->data + buf->write_pos, max_length);
+    } else {
+        bytes_read = read(fd, buf->data + buf->write_pos, max_length);
+    }
 
     if (bytes_read < 0) {
-        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-            return BUFFER_OK; // No data available but no error
-        }
         return BUFFER_ERROR_IO;
     }
 
@@ -239,7 +241,8 @@ buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, size_t max_length)
     return BUFFER_OK;
 }
 
-buffer_error_t buffer_write_to_fd(buffer_t *buf, int fd, size_t max_length)
+buffer_error_t buffer_write_to_fd(buffer_t *buf, int fd, int nonblocking,
+                                  size_t max_length)
 {
     if (!buf)
         return BUFFER_ERROR_NULL;
@@ -254,12 +257,16 @@ buffer_error_t buffer_write_to_fd(buffer_t *buf, int fd, size_t max_length)
         max_length = available;
     }
 
-    ssize_t bytes_written = write(fd, buf->data + buf->read_pos, max_length);
+    ssize_t bytes_written = 0;
+    if (nonblocking) {
+        bytes_written =
+            send_nonblocking(fd, buf->data + buf->read_pos, max_length);
+    } else {
+
+        bytes_written = write(fd, buf->data + buf->read_pos, max_length);
+    }
 
     if (bytes_written < 0) {
-        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-            return BUFFER_OK; // Would block, but not an error
-        }
         return BUFFER_ERROR_IO;
     }
 
