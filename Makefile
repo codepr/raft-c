@@ -13,6 +13,7 @@ CFLAGS=-Wall                                  \
 LDFLAGS = -L. -lraft
 
 RAFT_C_SRC = src/timeutil.c             \
+             src/buffer.c               \
              src/iomux.c                \
              src/statement_parse.c      \
              src/statement_execute.c    \
@@ -29,6 +30,7 @@ RAFT_C_SRC = src/timeutil.c             \
              src/partition.c            \
              src/index.c                \
              src/commitlog.c            \
+             src/tcc.c                  \
              src/wal.c                  \
              src/server.c
 RAFT_C_OBJ = $(RAFT_C_SRC:.c=.o)

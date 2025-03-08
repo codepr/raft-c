@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "binary.h"
+#include "buffer.h"
 #include "darray.h"
 #include <errno.h>
 #include <stdio.h>

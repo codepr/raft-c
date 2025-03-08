@@ -1,5 +1,6 @@
 #include "commitlog.h"
 #include "binary.h"
+#include "buffer.h"
 #include "logger.h"
 #include "storage.h"
 #include "timeseries.h"

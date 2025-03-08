@@ -13,10 +13,7 @@ typedef struct {
 
 // Genereal APIs
 
-typedef struct buffer {
-    uint8_t *data;
-    size_t size;
-} buffer_t;
+typedef struct buffer buffer_t;
 
 int makedir(const char *path);
 int buffer_read_file(FILE *fp, buffer_t *b);

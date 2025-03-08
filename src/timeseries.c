@@ -760,6 +760,7 @@ int ts_range(const timeseries_t *ts, uint64_t start, uint64_t end,
     }
 
     uint64_t sec0 = start / (uint64_t)1e9;
+    int ret       = 0;
 
     // Check if the range falls in the head chunk
     if (is_range_in_head_chunk(ts, sec0, start)) {
@@ -774,37 +775,51 @@ int ts_range(const timeseries_t *ts, uint64_t start, uint64_t end,
     }
 
     // Search in the persistence
-    const partition_t *curr_p = NULL;
-    size_t partition_i        = find_starting_partition(ts, start);
+    size_t partition_i     = find_starting_partition(ts, start);
+    uint64_t current_start = start;
 
     // Fetch records from partitions within the time range
     while (partition_i < ts->partition_nr &&
            ts->partitions[partition_i].start_ts <= end) {
-        curr_p = &ts->partitions[partition_i];
+        const partition_t *curr_p = &ts->partitions[partition_i];
+        uint64_t part_end = (curr_p->end_ts > end) ? end : curr_p->end_ts;
 
-        // Fetch records from the current partition
-        if (curr_p->end_ts >= end) {
-            if (fetch_records_from_partition(curr_p, start, end, out) < 0)
-                return -1;
+        if ((ret = fetch_records_from_partition(curr_p, current_start, part_end,
+                                                out)) < 0)
+            return ret;
+
+        // Update the search start to continue after this partition
+        current_start = curr_p->end_ts + 1;
+        partition_i++;
+
+        // If we've reached the end of our range, we're done
+        if (part_end == end)
             return 0;
-        } else {
-            if (fetch_records_from_partition(curr_p, start, curr_p->end_ts,
-                                             out) < 0)
-                return -1;
-            start = curr_p->end_ts;
-            partition_i++;
+    }
+
+    // If we get here, we need to check the in-memory chunks for any remaining
+    // range
+
+    // Check prev chunk if it might contain our range
+    if (ts->prev->base_offset != 0 && current_start <= end) {
+        uint64_t prev_end =
+            da_back(&ts->prev->points[ts->prev->max_index]).timestamp;
+        if (prev_end >= current_start) {
+            ts_chunk_range(ts->prev, current_start,
+                           (prev_end > end) ? end : prev_end, out);
+
+            // Move start past the prev chunk
+            current_start = prev_end + 1;
         }
     }
 
-    // Fetch records from the previous chunk if it exists
-    if (ts->prev->base_offset != 0) {
-        ts_chunk_range(ts->prev, start, end, out);
-        start = da_back(&ts->prev->points[ts->prev->max_index]).timestamp;
-    }
-
-    // Fetch records from the current chunk if it exists
-    if (ts->head->base_offset != 0) {
-        ts_chunk_range(ts->head, ts->head->start_ts, end, out);
+    // Check head chunk if we still have range to cover
+    if (ts->head->base_offset != 0 && current_start <= end &&
+        ts->head->start_ts <= end) {
+        ts_chunk_range(ts->head,
+                       (ts->head->start_ts > current_start) ? ts->head->start_ts
+                                                            : current_start,
+                       end, out);
     }
 
     return 0;
