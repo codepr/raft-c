@@ -19,7 +19,7 @@
     do {                                                                       \
         if ((actual) != (expected)) {                                          \
             fprintf(stderr,                                                    \
-                    "FAIL: integer expected %llu, got %llu (line %d)\n",       \
+                    " FAIL: integer expected %llu, got %llu (line %d)\n",      \
                     (uint64_t)(expected), (uint64_t)(actual), __LINE__);       \
             return -1;                                                         \
         }                                                                      \
@@ -28,7 +28,8 @@
 #define ASSERT_FEQ(actual, expected)                                           \
     do {                                                                       \
         if (!(fequals((actual), (expected)))) {                                \
-            fprintf(stderr, "FAIL: float expected %.5f, got %.5f (line %d)\n", \
+            fprintf(stderr,                                                    \
+                    " FAIL: float expected %.5f, got %.5f (line %d)\n",        \
                     (double_t)(expected), (double_t)(actual), __LINE__);       \
             return -1;                                                         \
         }                                                                      \
@@ -41,11 +42,21 @@
             return -1;                                                         \
         }                                                                      \
         if (strncmp((actual), (expected), strlen((expected))) != 0) {          \
-            fprintf(stderr, "FAIL: expected %s, got %s (line %d)\n",           \
+            fprintf(stderr, " FAIL: expected %s, got %s (line %d)\n",          \
                     (expected), (actual), __LINE__);                           \
             return -1;                                                         \
         }                                                                      \
     } while (0)
+
+#define TEST_HEADER                                                            \
+    {                                                                          \
+        printf(" %s", __FUNCTION__);                                           \
+        fflush(stdout);                                                        \
+    }
+
+#define PAD 50
+#define TEST_FOOTER                                                            \
+    printf("%*s\n", PAD - ((int)strlen(__FUNCTION__) - 4), "PASS");
 
 void rm_recursive(const char *path);
 

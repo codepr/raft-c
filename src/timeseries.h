@@ -118,6 +118,8 @@ extern int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r);
 extern int ts_range(const timeseries_t *ts, uint64_t t0, uint64_t t1,
                     record_array_t *out);
 
+extern int ts_scan(const timeseries_t *ts, record_array_t *out);
+
 extern void ts_print(const timeseries_t *ts);
 
 typedef struct timeseries_db {

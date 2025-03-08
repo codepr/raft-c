@@ -5,8 +5,7 @@
 
 static int parse_create_db_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("CREATEDB test-db");
 
@@ -15,14 +14,13 @@ static int parse_create_db_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_create_ts_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("CREATE ts-test");
 
@@ -31,14 +29,13 @@ static int parse_create_ts_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_create_ts_retention_duplication_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("CREATE ts-test 3d 'ignore'");
 
@@ -54,14 +51,13 @@ static int parse_create_ts_retention_duplication_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_insert_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt =
         stmt_parse("INSERT INTO test-ts values (87829132377, 12.2344)");
@@ -73,14 +69,13 @@ static int parse_insert_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_insert_single_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("INSERT INTO test-ts VALUE 12.2344");
 
@@ -90,14 +85,13 @@ static int parse_insert_single_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_insert_multi_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     size_t query_len     = 512;
     size_t records_len   = 20;
@@ -146,14 +140,13 @@ static int parse_insert_multi_test(void)
     free(values);
     free(query);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_insert_multi_auto_ts_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("INSERT INTO test-ts VALUES (now(), 12.2344)");
 
@@ -163,14 +156,13 @@ static int parse_insert_multi_auto_ts_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_delete_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("DELETE test-db");
 
@@ -178,14 +170,13 @@ static int parse_delete_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_delete_ts_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     stmt_t *stmt = stmt_parse("DELETE ts-test FROM test-db");
 
@@ -194,14 +185,13 @@ static int parse_delete_ts_test(void)
 
     stmt_free(stmt);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int parse_select_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc       = 0;
 
@@ -226,7 +216,7 @@ static int parse_select_test(void)
     ASSERT_FEQ(stmt->select.where->right->value, 16.2);
     ASSERT_EQ(stmt->select.where->right->operator, OP_LESS);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -236,8 +226,7 @@ exit:
 
 static int parse_select_fn_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc = 0;
 
@@ -256,7 +245,7 @@ static int parse_select_fn_test(void)
     ASSERT_EQ(stmt->select.selector.interval.start.value, 2382913);
     ASSERT_EQ(stmt->select.selector.interval.end.value, 39238293);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -266,8 +255,7 @@ exit:
 
 static int parse_select_now_fn_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc = 0;
 
@@ -286,7 +274,7 @@ static int parse_select_now_fn_test(void)
     ASSERT_EQ(stmt->select.selector.interval.start.timefn, FN_NOW);
     ASSERT_EQ(stmt->select.selector.interval.end.value, 39238293);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -296,8 +284,7 @@ exit:
 
 static int parse_select_date_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc       = 0;
 
@@ -316,7 +303,7 @@ static int parse_select_date_test(void)
     ASSERT_SEQ(stmt->select.selector.interval.start.date, "2025-03-01");
     ASSERT_SEQ(stmt->select.selector.interval.end.date, "2025-05-01");
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -326,8 +313,7 @@ exit:
 
 static int parse_select_limit_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc       = 0;
 
@@ -347,7 +333,7 @@ static int parse_select_limit_test(void)
     ASSERT_SEQ(stmt->select.selector.interval.start.date, "2025-03-01");
     ASSERT_SEQ(stmt->select.selector.interval.end.date, "2025-05-01");
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -357,8 +343,7 @@ exit:
 
 static int parse_select_where_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc       = 0;
 
@@ -381,7 +366,7 @@ static int parse_select_where_test(void)
     ASSERT_FEQ(stmt->select.where->right->value, 2.5e-3);
     ASSERT_EQ(stmt->select.where->right->operator, OP_LESS);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -391,8 +376,7 @@ exit:
 
 static int parse_select_operation_test(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc = 0;
 
@@ -426,7 +410,7 @@ static int parse_select_operation_test(void)
     ASSERT_EQ(stmt->select.selector.interval.end.type, TU_DATE);
     ASSERT_SEQ(stmt->select.selector.interval.end.date, "2025-05-01");
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
 exit:
     stmt_free(stmt);
@@ -437,7 +421,6 @@ exit:
 int parser_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
-    fflush(stdout);
 
     int cases   = 16;
     int success = cases;
@@ -459,7 +442,7 @@ int parser_test(void)
     success += parse_insert_single_test();
     success += parse_create_ts_retention_duplication_test();
 
-    printf("\nTest suite summary: %d passed, %d failed\n", success,
+    printf("\n Test suite summary: %d passed, %d failed\n", success,
            cases - success);
 
     return 0;

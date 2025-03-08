@@ -10,8 +10,7 @@
 
 static int test_encode_request_simple(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
     char query[]                    = "CREATE db";
@@ -30,14 +29,13 @@ static int test_encode_request_simple(void)
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
                 "FAIL: encoded buffer doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_encode_request_empty(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
     request_t req                   = {.query = "", .length = 0};
@@ -52,14 +50,13 @@ static int test_encode_request_empty(void)
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
                 "FAIL: encoded buffer doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_request_simple(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: $9\r\nCREATE db\r\n
     uint8_t data[] = {'$', '9', '\r', '\n', 'C', 'R',  'E', 'A',
@@ -74,14 +71,13 @@ static int test_decode_request_simple(void)
     ASSERT_TRUE(strcmp("CREATE db", req.query) == 0,
                 "FAIL: query doesn't match expecation\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_request_invalid_marker(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: %9\r\nCREATE db\r\n (% instead of $)
     uint8_t data[] = {'%', '9', '\r', '\n', 'C', 'R',  'E', 'A',
@@ -92,14 +88,13 @@ static int test_decode_request_invalid_marker(void)
 
     ASSERT_EQ(-1, result);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_request_invalid_length(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: $a\r\nCREATE db\r\n ('a' instead of digit)
     uint8_t data[] = {'$', 'a', '\r', '\n', 'C', 'R',  'E', 'A',
@@ -110,14 +105,13 @@ static int test_decode_request_invalid_length(void)
 
     ASSERT_EQ(-1, result);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_request_mismatched_length(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: $10\r\nCREATE db\r\n (10 instead of 9)
     uint8_t data[] = {'$', '1', '0', '\r', '\n', 'C', 'R',  'E',
@@ -128,14 +122,13 @@ static int test_decode_request_mismatched_length(void)
 
     ASSERT_EQ(-1, result);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_encode_string_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
     char message[]                  = "OK";
@@ -154,14 +147,13 @@ static int test_encode_string_response(void)
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
                 "FAIL: encoded buffer doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_encode_error_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
     char message[]                  = "Error: key not found";
@@ -182,14 +174,13 @@ static int test_encode_error_response(void)
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
                 "FAIL: encoded buffer doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_encode_array_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
 
@@ -216,14 +207,13 @@ static int test_encode_array_response(void)
     ASSERT_TRUE(memcmp(expected, buffer, sizeof(expected)) == 0,
                 "FAIL: encoding doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_encode_empty_array_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
 
@@ -240,14 +230,13 @@ static int test_encode_empty_array_response(void)
     ASSERT_TRUE(memcmp(expected, buffer, result) == 0,
                 "FAIL: encoded buffer doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_string_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: $2\r\nOK\r\n
     uint8_t data[]  = {'$', '2', '\r', '\n', 'O', 'K', '\r', '\n'};
@@ -263,14 +252,13 @@ static int test_decode_string_response(void)
     ASSERT_TRUE(strcmp("OK", resp.string_response.message) == 0,
                 "FAIL: message doesn't match expected\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_error_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: !5\r\nERROR\r\n
     uint8_t data[]  = {'!', '5', '\r', '\n', 'E', 'R',
@@ -287,14 +275,13 @@ static int test_decode_error_response(void)
     ASSERT_TRUE(strcmp("ERROR", resp.string_response.message) == 0,
                 "FAIL: message doesn't match input\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_array_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: #2\r\n:1234567890\r\n;42.5\r\n:1234567891\r\n;43.7\r\n
     uint8_t data[]  = {'#',  '2', '\r', '\n', ':',  '1',  '2',  '3',  '4',
@@ -321,14 +308,13 @@ static int test_decode_array_response(void)
     // Free allocated memory
     free_response(&resp);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_empty_array_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: #0\r\n
     uint8_t data[]  = {'#', '0', '\r', '\n'};
@@ -346,14 +332,13 @@ static int test_decode_empty_array_response(void)
 
     // No need to free since records is NULL
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_decode_array_response_invalid_format(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Input: #2\r\n:1234567890\r\nInvalid\r\n:1234567891\r\n;43.7\r\n
     uint8_t data[]  = {'#', '2',  '\r', '\n', ':',  '1',  '2',  '3', '4',  '5',
@@ -368,14 +353,13 @@ static int test_decode_array_response_invalid_format(void)
 
     ASSERT_EQ(-1, result);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_free_response(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     response_t resp = {
         .type           = RT_ARRAY,
@@ -400,14 +384,13 @@ static int test_free_response(void)
         return -1;
     }
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_request_round_trip(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Original request
     char query[]           = "CREATE timeseries INTO db";
@@ -430,14 +413,13 @@ static int test_request_round_trip(void)
     ASSERT_TRUE(strcmp(req_original.query, req_decoded.query) == 0,
                 "FAIL: original and decoded queries don't match\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_string_response_round_trip(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Original response
     char message[]           = "This is a test message";
@@ -467,14 +449,13 @@ static int test_string_response_round_trip(void)
                        resp_decoded.string_response.message) == 0,
                 "FAIL: original and decoded messages don't match\n");
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 static int test_array_response_round_trip(void)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     // Create a small array
     response_record_t records[3] = {{.timestamp = 1000000001, .value = 10.1},
@@ -514,14 +495,13 @@ static int test_array_response_round_trip(void)
     // Clean up
     free_response(&resp_decoded);
 
-    printf("PASS\n");
+    TEST_FOOTER;
     return 0;
 }
 
 int encoding_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
-    fflush(stdout);
 
     int cases   = 19;
     int success = cases;
@@ -557,7 +537,7 @@ int encoding_test(void)
     success += test_string_response_round_trip();
     success += test_array_response_round_trip();
 
-    printf("\nTest suite summary: %d passed, %d failed\n", success,
+    printf("\n Test suite summary: %d passed, %d failed\n", success,
            cases - success);
 
     return 0;

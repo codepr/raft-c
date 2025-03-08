@@ -825,6 +825,36 @@ int ts_range(const timeseries_t *ts, uint64_t start, uint64_t end,
     return 0;
 }
 
+int ts_scan(const timeseries_t *ts, record_array_t *out)
+{
+    if (!ts || !out)
+        return TS_E_NULL_POINTER;
+
+    // Start with the oldest partition
+    for (size_t i = 0; i < ts->partition_nr; i++) {
+        if (fetch_records_from_partition(&ts->partitions[i],
+                                         ts->partitions[i].start_ts,
+                                         ts->partitions[i].end_ts, out) < 0)
+            return -1;
+    }
+
+    // Then add from the previous chunk if it exists
+    if (ts->prev->base_offset != 0) {
+        ts_chunk_range(
+            ts->prev, ts->prev->start_ts,
+            da_back(&ts->prev->points[ts->prev->max_index]).timestamp, out);
+    }
+
+    // Then add from the current chunk if it exists
+    if (ts->head->base_offset != 0) {
+        ts_chunk_range(
+            ts->head, ts->head->start_ts,
+            da_back(&ts->head->points[ts->head->max_index]).timestamp, out);
+    }
+
+    return 0;
+}
+
 void ts_print(const timeseries_t *ts)
 {
     for (int i = 0; i < TS_CHUNK_SIZE; ++i) {

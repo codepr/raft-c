@@ -11,25 +11,93 @@
 
 static uint64_t timestamps[POINTSNR] = {0};
 
+static int scan_entire_timeseries_test(timeseries_t *ts)
+{
+    TEST_HEADER;
+
+    record_array_t out = {0};
+
+    if (ts_scan(ts, &out) < 0) {
+        fprintf(stderr, "FAIL: ts_scan failed\n");
+        return -1;
+    }
+
+    ASSERT_EQ(out.length, POINTSNR);
+
+    for (int i = 0; i < POINTSNR; ++i) {
+        ASSERT_EQ(out.items[i].timestamp, timestamps[i]);
+        ASSERT_EQ(out.items[i].value, i);
+    }
+
+    TEST_FOOTER;
+
+    return 0;
+}
+
+static int scan_entire_timeseries_out_of_order_test(timeseries_t *ts)
+{
+    TEST_HEADER;
+
+    int rc              = 0;
+    int cases           = TESTCASES / 2;
+    int index           = 0;
+    int seen[TESTCASES] = {0};
+    uint64_t newts      = 0;
+    uint64_t delta      = 3e4;
+    double_t value      = 0.0f;
+    record_array_t out  = {0};
+
+    for (int i = 0; i < cases; ++i) {
+        // Not the most efficient way to do it..
+        do {
+            index = (double_t)rand() / RAND_MAX * (POINTSNR - 1);
+        } while (seen[index]); // Retry if duplicate
+
+        seen[index] = 1; // Mark value as used
+        newts       = timestamps[index] + delta;
+        value       = (double_t)(rand() % cases);
+
+        if (ts_insert(ts, newts, value) < 0) {
+            fprintf(stderr, "FAIL: ts_insert failed for record {%llu, %.2f}\n",
+                    timestamps[index], value);
+            rc = -1;
+            goto exit;
+        }
+    }
+
+    if (ts_scan(ts, &out) < 0) {
+        fprintf(stderr, "FAIL: ts_scan failed\n");
+        return -1;
+    }
+
+    // This is pretty brittle
+    // TODO make it decent
+    ASSERT_EQ(out.length, POINTSNR + TESTCASES + TESTCASES / 2);
+
+exit:
+
+    TEST_FOOTER;
+
+    return rc;
+}
+
 // Test ts_insert with NULL timeseries
 static int insert_null_test(timeseries_t *ts)
 {
     (void)ts;
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int result = ts_insert(NULL, 1000000000ULL, 42.0);
     ASSERT_EQ(result, TS_E_NULL_POINTER);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return 0;
 }
 
 static int find_single_record_test(timeseries_t *ts)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int cases  = TESTCASES;
     int index  = 0;
@@ -48,15 +116,14 @@ static int find_single_record_test(timeseries_t *ts)
         ASSERT_FEQ((double_t)index, r.value);
     }
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return 0;
 }
 
 static int find_range_invalid_test(timeseries_t *ts)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     record_array_t out = {0};
     int result         = ts_range(ts, timestamps[10], timestamps[8], &out);
@@ -64,29 +131,27 @@ static int find_range_invalid_test(timeseries_t *ts)
     ASSERT_EQ(result, TS_E_INVALID_RANGE);
 
     da_free(&out);
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return 0;
 }
 
 static int find_range_null_test(timeseries_t *ts)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int result = ts_range(ts, timestamps[2], timestamps[8], NULL);
 
     ASSERT_EQ(result, TS_E_NULL_POINTER);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return 0;
 }
 
 static int find_range_records_test(timeseries_t *ts)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc             = 0;
     int start          = 0;
@@ -119,15 +184,14 @@ static int find_range_records_test(timeseries_t *ts)
 exit:
     da_free(&out);
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return rc;
 }
 
 static int insert_out_of_order_test(timeseries_t *ts)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int rc              = 0;
     int cases           = TESTCASES / 2;
@@ -167,15 +231,14 @@ static int insert_out_of_order_test(timeseries_t *ts)
 
 exit:
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return rc;
 }
 
 static int insert_out_of_bounds_test(timeseries_t *ts)
 {
-    printf("%s..", __FUNCTION__);
-    fflush(stdout);
+    TEST_HEADER;
 
     int cases           = TESTCASES / 2;
     int index           = 0;
@@ -213,7 +276,7 @@ static int insert_out_of_bounds_test(timeseries_t *ts)
         r = (record_t){0};
     }
 
-    printf("PASS\n");
+    TEST_FOOTER;
 
     return 0;
 }
@@ -221,7 +284,8 @@ static int insert_out_of_bounds_test(timeseries_t *ts)
 int timeseries_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
-    int cases   = 7;
+
+    int cases   = 9;
     int success = cases;
 
     srand(time(NULL));
@@ -246,6 +310,7 @@ int timeseries_test(void)
         usleep(rand() % INTERVAL);
     }
 
+    success += scan_entire_timeseries_test(ts);
     success += find_single_record_test(ts);
     success += find_range_records_test(ts);
     success += find_range_null_test(ts);
@@ -253,13 +318,14 @@ int timeseries_test(void)
     success += insert_null_test(ts);
     success += insert_out_of_order_test(ts);
     success += insert_out_of_bounds_test(ts);
+    success += scan_entire_timeseries_out_of_order_test(ts);
 
     ts_close(ts);
     tsdb_close(db);
 
     rm_recursive(TESTDIR);
 
-    printf("\nTest suite summary: %d passed, %d failed\n", success,
+    printf("\n Test suite summary: %d passed, %d failed\n", success,
            cases - success);
 
     return success < cases ? -1 : 0;
