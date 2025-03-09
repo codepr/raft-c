@@ -245,7 +245,7 @@ static int test_decode_string_response(void)
     uint8_t data[]  = {'$', '2', '\r', '\n', 'O', 'K', '\r', '\n'};
     response_t resp = {0};
 
-    ssize_t result  = decode_response(data, &resp);
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
 
     ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
@@ -268,7 +268,7 @@ static int test_decode_error_response(void)
                        'R', 'O', 'R',  '\r', '\n'};
     response_t resp = {0};
 
-    ssize_t result  = decode_response(data, &resp);
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
 
     ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
@@ -295,7 +295,7 @@ static int test_decode_array_response(void)
 
     response_t resp = {0};
 
-    ssize_t result  = decode_response(data, &resp);
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
 
     ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
@@ -324,7 +324,7 @@ static int test_decode_empty_array_response(void)
 
     response_t resp = {0};
 
-    ssize_t result  = decode_response(data, &resp);
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
 
     ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(sizeof(data), result);
@@ -352,8 +352,233 @@ static int test_decode_array_response_invalid_format(void)
 
     response_t resp = {0};
 
-    ssize_t result  = decode_response(data, &resp);
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
 
+    ASSERT_EQ(-1, result);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_single_item(void)
+{
+    TEST_HEADER;
+
+    // Input: "~1\r\n:1234567890\r\n;42.500000\r\n\r\n"
+    uint8_t data[]  = {'~',  '1', '\r', '\n', ':',  '1',  '2', '3',
+                       '4',  '5', '6',  '7',  '8',  '9',  '0', '\r',
+                       '\n', ';', '4',  '2',  '.',  '5',  '0', '0',
+                       '0',  '0', '0',  '\r', '\n', '\r', '\n'};
+
+    response_t resp = {0};
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
+
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
+    ASSERT_EQ(sizeof(data), result);
+    ASSERT_EQ(RT_STREAM, resp.type);
+    ASSERT_EQ(1, resp.stream_response.batch.length);
+    ASSERT_EQ(1234567890, resp.stream_response.batch.items[0].timestamp);
+    ASSERT_TRUE(resp.stream_response.batch.items[0].value == 42.5,
+                " FAIL: value doesn't match\n");
+    ASSERT_EQ(resp.stream_response.is_final, 0);
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_multiple_items(void)
+{
+    TEST_HEADER;
+
+    // Input:
+    // "~2\r\n:1234567890\r\n;42.500000\r\n:1234567891\r\n;43.700000\r\n\r\n"
+    uint8_t data[] = {'~',  '2',  '\r', '\n', ':',  '1',  '2',  '3',  '4',  '5',
+                      '6',  '7',  '8',  '9',  '0',  '\r', '\n', ';',  '4',  '2',
+                      '.',  '5',  '0',  '0',  '0',  '0',  '0',  '\r', '\n', ':',
+                      '1',  '2',  '3',  '4',  '5',  '6',  '7',  '8',  '9',  '1',
+                      '\r', '\n', ';',  '4',  '3',  '.',  '7',  '0',  '0',  '0',
+                      '0',  '0',  '\r', '\n', '\r', '\n'};
+
+    response_t resp = {0};
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
+
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
+    ASSERT_EQ(sizeof(data), result);
+    ASSERT_EQ(RT_STREAM, resp.type);
+    ASSERT_EQ(2, resp.stream_response.batch.length);
+    ASSERT_EQ(1234567890, resp.stream_response.batch.items[0].timestamp);
+    ASSERT_EQ(1234567891, resp.stream_response.batch.items[1].timestamp);
+    ASSERT_TRUE(resp.stream_response.batch.items[0].value == 42.5,
+                " FAIL: first value doesn't match\n");
+    ASSERT_TRUE(resp.stream_response.batch.items[1].value == 43.7,
+                " FAIL: second value doesn't match\n");
+    ASSERT_EQ(resp.stream_response.is_final, 0);
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_final_chunk(void)
+{
+    TEST_HEADER;
+
+    // Input: "~1\r\n:1234567890\r\n;42.500000\r\n\r\n~0\r\n"
+    uint8_t data[]  = {'~',  '1',  '\r', '\n', ':', '1', '2',  '3',  '4',
+                       '5',  '6',  '7',  '8',  '9', '0', '\r', '\n', ';',
+                       '4',  '2',  '.',  '5',  '0', '0', '0',  '0',  '0',
+                       '\r', '\n', '\r', '\n', '~', '0', '\r', '\n'};
+
+    response_t resp = {0};
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
+
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
+    ASSERT_EQ(result, sizeof(data));
+    ASSERT_EQ(RT_STREAM, resp.type);
+    ASSERT_EQ(1, resp.stream_response.batch.length);
+    ASSERT_EQ(1234567890, resp.stream_response.batch.items[0].timestamp);
+    ASSERT_TRUE(resp.stream_response.batch.items[0].value == 42.5,
+                " FAIL: value doesn't match\n");
+    ASSERT_EQ(resp.stream_response.is_final, 1);
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_empty_batch(void)
+{
+    TEST_HEADER;
+
+    // Input: "~0\r\n\r\n"
+    uint8_t data[]  = {'~', '0', '\r', '\n', '\r', '\n'};
+
+    response_t resp = {0};
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
+
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
+    ASSERT_EQ(sizeof(data), result);
+    ASSERT_EQ(RT_STREAM, resp.type);
+    ASSERT_EQ(0, resp.stream_response.batch.length);
+    ASSERT_EQ(NULL, resp.stream_response.batch.items);
+    ASSERT_EQ(resp.stream_response.is_final, 0);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_final_empty_batch(void)
+{
+    TEST_HEADER;
+
+    // Input: "~0\r\n\r\n~0\r\n"
+    uint8_t data[]  = {'~', '0', '\r', '\n', '\r', '\n', '~', '0', '\r', '\n'};
+
+    response_t resp = {0};
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
+
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
+    ASSERT_EQ(sizeof(data), result);
+    ASSERT_EQ(RT_STREAM, resp.type);
+    ASSERT_EQ(0, resp.stream_response.batch.length);
+    ASSERT_EQ(NULL, resp.stream_response.batch.items);
+    ASSERT_EQ(resp.stream_response.is_final, 1);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_negative_value(void)
+{
+    TEST_HEADER;
+
+    // Input: "~1\r\n:1234567890\r\n;-42.500000\r\n\r\n"
+    uint8_t data[]  = {'~',  '1', '\r', '\n', ':',  '1',  '2',  '3',
+                       '4',  '5', '6',  '7',  '8',  '9',  '0',  '\r',
+                       '\n', ';', '-',  '4',  '2',  '.',  '5',  '0',
+                       '0',  '0', '0',  '0',  '\r', '\n', '\r', '\n'};
+
+    response_t resp = {0};
+    ssize_t result  = decode_response(data, &resp, sizeof(data));
+
+    ASSERT_TRUE(result > 0, " FAIL: decoding failed\n");
+    ASSERT_EQ(sizeof(data), result);
+    ASSERT_EQ(RT_STREAM, resp.type);
+    ASSERT_EQ(1, resp.stream_response.batch.length);
+    ASSERT_EQ(1234567890, resp.stream_response.batch.items[0].timestamp);
+    ASSERT_TRUE(resp.stream_response.batch.items[0].value == -42.5,
+                " FAIL: value doesn't match\n");
+    ASSERT_EQ(resp.stream_response.is_final, 0);
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_invalid_format(void)
+{
+    TEST_HEADER;
+
+    // Invalid marker
+    uint8_t data1[] = {'%', '1', '\r', '\n'}; // Should start with '~'
+    response_t resp = {0};
+    ssize_t result  = decode_response(data1, &resp, sizeof(data1));
+    ASSERT_EQ(-1, result);
+
+    // Invalid length format
+    uint8_t data2[] = {'~', 'x', '\r', '\n'}; // Non-numeric length
+    result          = decode_response(data2, &resp, sizeof(data2));
+    ASSERT_EQ(-1, result);
+
+    // Missing CRLF after length
+    // TODO fix this case with a proper iscrlf function accounting for
+    // errors
+    // uint8_t data3[] = {'~', '1', '.', '\n'};
+    // result          = decode_response(data3, &resp, sizeof(data3));
+    // ASSERT_EQ(-1, result);
+
+    // Invalid timestamp marker
+    uint8_t data4[] = {'~', '1', '\r', '\n', '$', '1',
+                       '2', '3', '4',  '\r', '\n'}; // Should be ':'
+    result          = decode_response(data4, &resp, sizeof(data4));
+    ASSERT_EQ(-1, result);
+
+    // Invalid value marker
+    uint8_t data5[] = {
+        '~',  '1',  '\r', '\n', ':', '1', '2', '3',  '4',
+        '\r', '\n', '$',  '4',  '2', '.', '5', '\r', '\n'}; // Should be ';'
+    result = decode_response(data5, &resp, sizeof(data5));
+    ASSERT_EQ(-1, result);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_decode_stream_response_null_parameters(void)
+{
+    TEST_HEADER;
+
+    // Valid data
+    uint8_t data[]  = {'~', '1', '\r', '\n', ':',  '1',  '2',  '3',  '4',
+                       '5', '6', '7',  '8',  '9',  '0',  '\r', '\n', ';',
+                       '4', '2', '.',  '5',  '\r', '\n', '\r', '\n'};
+
+    // Test with NULL data
+    response_t resp = {0};
+    ssize_t result  = decode_response(NULL, &resp, sizeof(data));
+    ASSERT_EQ(-1, result);
+
+    // Test with NULL response
+    result = decode_response(data, NULL, 0);
     ASSERT_EQ(-1, result);
 
     TEST_FOOTER;
@@ -432,7 +657,8 @@ static int test_string_response_round_trip(void)
     // Decode
     response_t resp_decoded = {0};
 
-    ssize_t decoded_length  = decode_response(buffer, &resp_decoded);
+    ssize_t decoded_length =
+        decode_response(buffer, &resp_decoded, encoded_length);
     ASSERT_TRUE(decoded_length > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(encoded_length, decoded_length);
     ASSERT_EQ(resp_original.type, resp_decoded.type);
@@ -469,7 +695,8 @@ static int test_array_response_round_trip(void)
     // Decode
     response_t resp_decoded = {0};
 
-    ssize_t decoded_length  = decode_response(buffer, &resp_decoded);
+    ssize_t decoded_length =
+        decode_response(buffer, &resp_decoded, encoded_length);
     ASSERT_TRUE(decoded_length > 0, " FAIL: decoding failed\n");
     ASSERT_EQ(encoded_length, decoded_length);
     ASSERT_EQ(resp_original.type, resp_decoded.type);
@@ -786,7 +1013,7 @@ int encoding_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
 
-    int cases   = 27;
+    int cases   = 35;
     int success = cases;
 
     // Request encoding tests
@@ -819,6 +1046,14 @@ int encoding_test(void)
     success += test_decode_array_response();
     success += test_decode_empty_array_response();
     success += test_decode_array_response_invalid_format();
+    success += test_decode_stream_response_single_item();
+    success += test_decode_stream_response_multiple_items();
+    success += test_decode_stream_response_final_chunk();
+    success += test_decode_stream_response_empty_batch();
+    success += test_decode_stream_response_final_empty_batch();
+    success += test_decode_stream_response_negative_value();
+    success += test_decode_stream_response_invalid_format();
+    success += test_decode_stream_response_null_parameters();
 
     // Memory management test
     success += test_free_response();

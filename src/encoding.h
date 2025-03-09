@@ -76,7 +76,7 @@ ssize_t decode_request(const uint8_t *data, request_t *dst);
 ssize_t encode_response(const response_t *r, uint8_t *dst);
 
 // Decode a response from an array of bytes into a Response struct
-ssize_t decode_response(const uint8_t *data, response_t *dst);
+ssize_t decode_response(const uint8_t *data, response_t *dst, size_t datasize);
 
 // Free an array response
 void free_response(response_t *rs);

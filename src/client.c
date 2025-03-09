@@ -43,7 +43,7 @@ int client_recv_response(client_t *c, response_t *rs)
     if (n < 0)
         return -1;
 
-    n = decode_response(data, rs);
+    n = decode_response(data, rs, n);
     if (n < 0)
         return -1;
 

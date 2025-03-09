@@ -18,8 +18,13 @@ static size_t setcrlf(uint8_t *dst, size_t pos)
     return pos;
 }
 
+// TODO fix this with a proper iscrlf function accounting for
+// errors, bool is not enough
 static bool iscrlf(const uint8_t *buf)
 {
+    if (*buf != '\r')
+        return false;
+
     return (buf[0] == '\r' && buf[1] == '\n');
 }
 
@@ -345,6 +350,22 @@ static ssize_t decode_string(const uint8_t *ptr, response_t *dst)
     return total_length;
 }
 
+static const uint8_t *copy_value(const uint8_t *ptr, char dst[MAX_NUM_STR_LEN],
+                                 size_t *pos, ssize_t *total_length)
+{
+    while (!iscrlf(ptr) && *pos < MAX_NUM_STR_LEN - 1) {
+        dst[(*pos)++] = *ptr++;
+        (*total_length)++;
+    }
+
+    if (*pos == 0 || *pos >= MAX_NUM_STR_LEN - 1)
+        return NULL;
+
+    dst[*pos] = '\0';
+
+    return ptr;
+}
+
 static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
 {
     ssize_t total_length = 0;
@@ -361,16 +382,10 @@ static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
         char timestamp_str[MAX_NUM_STR_LEN] = {0};
         size_t ts_pos                       = 0;
 
-        while (!iscrlf(ptr) && ts_pos < MAX_NUM_STR_LEN - 1) {
-            timestamp_str[ts_pos++] = *ptr++;
-            total_length++;
-        }
-
-        if (ts_pos == 0 || ts_pos >= MAX_NUM_STR_LEN - 1)
+        ptr = copy_value(ptr, timestamp_str, &ts_pos, &total_length);
+        if (!ptr)
             return -1;
 
-        // Convert timestamp
-        timestamp_str[ts_pos] = '\0';
         char *endptr;
         dst->array_response.items[j].timestamp =
             strtoull(timestamp_str, &endptr, 10);
@@ -393,16 +408,10 @@ static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
         char value_str[MAX_NUM_STR_LEN] = {0};
         size_t val_pos                  = 0;
 
-        while (!iscrlf(ptr) && val_pos < MAX_NUM_STR_LEN - 1) {
-            value_str[val_pos++] = *ptr++;
-            total_length++;
-        }
-
-        if (val_pos == 0 || val_pos >= MAX_NUM_STR_LEN - 1)
+        ptr = copy_value(ptr, value_str, &val_pos, &total_length);
+        if (!ptr)
             return -1;
 
-        // Convert value
-        value_str[val_pos]                 = '\0';
         dst->array_response.items[j].value = strtold(value_str, &endptr);
         if (*endptr != '\0')
             return -1;
@@ -415,7 +424,141 @@ static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
     return total_length;
 }
 
-ssize_t decode_response(const uint8_t *data, response_t *dst)
+/**
+ * Decode a stream response from the buffer
+ * Format: "~<length>\r\n<chunk1>\r\n~<length>\r\n<chunk2>\r\n...~0\r\n"
+ */
+static ssize_t decode_stream_response(const uint8_t *data, response_t *dst,
+                                      size_t datasize)
+{
+    if (!data || !dst)
+        return -1;
+
+    if (*data != MARKER_STREAM)
+        return -1;
+
+    data++;
+
+    ssize_t offset                   = 1;
+    size_t batch_length              = 0;
+
+    // Parse batch length
+    size_t pos                       = 0;
+    char num_buffer[MAX_NUM_STR_LEN] = {0};
+
+    data = copy_value(data, num_buffer, &pos, &offset);
+    if (!data)
+        return -1;
+
+    char *endptr;
+
+    batch_length = strtoull(num_buffer, &endptr, 10);
+    if (*endptr != '\0')
+        return -1;
+
+    // Skip CRLF
+    data = skipcrlf(data);
+    offset += CRLF_LEN;
+
+    // Initialize response structure
+    dst->type                         = RT_STREAM;
+    dst->stream_response.batch.length = batch_length;
+    dst->stream_response.is_final     = false;
+
+    // Allocate memory for batch items
+    if (batch_length > 0) {
+        dst->stream_response.batch.items =
+            malloc(batch_length * sizeof(record_t));
+        if (!dst->stream_response.batch.items)
+            return -1;
+    } else {
+        dst->stream_response.batch.items = NULL;
+    }
+
+    // Parse records
+    for (size_t i = 0; i < batch_length; i++) {
+        // Parse timestamp
+        if (*data != MARKER_TIMESTAMP)
+            goto cleanup_error;
+
+        data++;
+        offset++;
+
+        pos = 0;
+        memset(num_buffer, 0, MAX_NUM_STR_LEN);
+
+        data = copy_value(data, num_buffer, &pos, &offset);
+        if (!data)
+            goto cleanup_error;
+
+        dst->stream_response.batch.items[i].timestamp =
+            strtoull(num_buffer, &endptr, 10);
+        if (*endptr != '\0')
+            goto cleanup_error;
+
+        // Skip CRLF
+        data = skipcrlf(data);
+        offset += CRLF_LEN;
+
+        // Parse value
+        if (*data != MARKER_VALUE)
+            goto cleanup_error;
+
+        data++;
+        offset++;
+
+        pos = 0;
+        memset(num_buffer, 0, MAX_NUM_STR_LEN);
+
+        data = copy_value(data, num_buffer, &pos, &offset);
+        if (!data)
+            goto cleanup_error;
+
+        dst->stream_response.batch.items[i].value =
+            strtold(num_buffer, &endptr);
+        if (*endptr != '\0')
+            goto cleanup_error;
+
+        // Skip CRLF
+        data = skipcrlf(data);
+        offset += CRLF_LEN;
+    }
+
+    // Skip blank line (CRLF)
+    if (!iscrlf(data))
+        goto cleanup_error;
+
+    data = skipcrlf(data);
+    offset += CRLF_LEN;
+
+    // Check for final chunk marker
+    if (offset + 3 < datasize) {
+        if (*data == MARKER_STREAM && *(data + 1) == '0') {
+            dst->stream_response.is_final = true;
+
+            data += 2;
+            offset += 2;
+
+            if (!iscrlf(data))
+                goto cleanup_error;
+
+            // Skip to the end of the termination sequence
+            data = skipcrlf(data);
+            offset += CRLF_LEN;
+        }
+    }
+
+    return offset;
+
+cleanup_error:
+
+    free(dst->stream_response.batch.items);
+    dst->stream_response.batch.items  = NULL;
+    dst->stream_response.batch.length = 0;
+    return -1;
+}
+
+ssize_t decode_response(const uint8_t *data, response_t *dst, size_t datasize)
 {
     if (!data || !dst)
         return -1;
@@ -431,6 +574,9 @@ ssize_t decode_response(const uint8_t *data, response_t *dst)
         // Treat error and common strings the same for now
         dst->type = RT_STRING;
         length    = decode_string(data, dst);
+        break;
+    case MARKER_STREAM:
+        length = decode_stream_response(data, dst, datasize);
         break;
     case MARKER_ARRAY:
         dst->type                  = RT_ARRAY;
