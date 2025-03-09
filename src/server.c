@@ -328,22 +328,13 @@ static response_t execute_statement(tcc_t *ctx, const stmt_t *stmt)
         break;
     case EXEC_SUCCESS_ARRAY:
         // Prepare array response from records
-        rs.type                   = RT_ARRAY;
-        rs.array_response.length  = exec_result.result_set.count;
-        rs.array_response.records = malloc(exec_result.result_set.count *
-                                           sizeof(*rs.array_response.records));
+        rs.type           = RT_ARRAY;
+        rs.array_response = exec_result.result_set;
 
-        if (!rs.array_response.records) {
-            set_string_response(&rs, 1, "Error: Memory allocation failed");
-            goto exit;
-        }
-
-        for (size_t i = 0; i < exec_result.result_set.count; i++) {
-            rs.array_response.records[i].timestamp =
-                exec_result.result_set.records[i].timestamp;
-            rs.array_response.records[i].value =
-                exec_result.result_set.records[i].value;
-        }
+        // if (!rs.array_response.records) {
+        //     set_string_response(&rs, 1, "Error: Memory allocation failed");
+        //     goto exit;
+        // }
 
         break;
     case EXEC_ERROR_UNSUPPORTED:

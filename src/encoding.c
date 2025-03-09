@@ -169,7 +169,7 @@ ssize_t encode_response(const response_t *r, uint8_t *dst)
         // Timestamp
         dst[pos++] = MARKER_TIMESTAMP;
         n          = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%" PRIu64,
-                              r->array_response.records[j].timestamp);
+                              r->array_response.items[j].timestamp);
         if (n < 0 || n >= MAX_NUM_STR_LEN)
             return -1;
 
@@ -185,7 +185,7 @@ ssize_t encode_response(const response_t *r, uint8_t *dst)
         // Value
         dst[pos++] = MARKER_VALUE;
         n          = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%lf",
-                              r->array_response.records[j].value);
+                              r->array_response.items[j].value);
         if (n < 0 || n >= MAX_NUM_STR_LEN)
             return -1;
 
@@ -290,7 +290,7 @@ static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
         // Convert timestamp
         timestamp_str[ts_pos] = '\0';
         char *endptr;
-        dst->array_response.records[j].timestamp =
+        dst->array_response.items[j].timestamp =
             strtoull(timestamp_str, &endptr, 10);
 
         if (*endptr != '\0')
@@ -320,8 +320,8 @@ static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
             return -1;
 
         // Convert value
-        value_str[val_pos]                   = '\0';
-        dst->array_response.records[j].value = strtold(value_str, &endptr);
+        value_str[val_pos]                 = '\0';
+        dst->array_response.items[j].value = strtold(value_str, &endptr);
         if (*endptr != '\0')
             return -1;
 
@@ -378,13 +378,13 @@ ssize_t decode_response(const uint8_t *data, response_t *dst)
 
         // Allocate memory for records
         if (dst->array_response.length > 0) {
-            dst->array_response.records =
-                malloc(dst->array_response.length * sizeof(response_record_t));
-            if (!dst->array_response.records) {
+            dst->array_response.items = calloc(
+                dst->array_response.length, sizeof(*dst->array_response.items));
+            if (!dst->array_response.items) {
                 return -1;
             }
         } else {
-            dst->array_response.records = NULL;
+            dst->array_response.items = NULL;
             return total_length;
         }
 
@@ -402,7 +402,7 @@ ssize_t decode_response(const uint8_t *data, response_t *dst)
     return length;
 
 cleanup:
-    free(dst->array_response.records);
+    da_free(&dst->array_response);
     return -1;
 }
 
@@ -411,10 +411,8 @@ void free_response(response_t *rs)
     if (!rs)
         return;
 
-    if (rs->type == RT_ARRAY && rs->array_response.records) {
-        free(rs->array_response.records);
-        rs->array_response.records = NULL;
-    }
+    if (rs->type == RT_ARRAY)
+        da_free(&rs->array_response);
 }
 
 static ssize_t request_vote_rpc_write(uint8_t *buf,

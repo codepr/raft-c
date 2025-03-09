@@ -1,7 +1,7 @@
 #ifndef ENCODING_H
 #define ENCODING_H
 
-#include <math.h>
+#include "timeseries.h"
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -40,18 +40,10 @@ typedef struct {
     char message[QUERYSIZE];
 } string_response_t;
 
-typedef struct response_record {
-    uint64_t timestamp;
-    double_t value;
-} response_record_t;
-
 /*
  * Define a response of type array, mainly used as SELECT response.
  */
-typedef struct {
-    size_t length;
-    response_record_t *records;
-} array_response_t;
+typedef record_array_t array_response_t;
 
 typedef enum { RT_STRING, RT_ARRAY } response_type_t;
 

@@ -1,4 +1,6 @@
+#include "../src/darray.h"
 #include "../src/encoding.h"
+#include "../src/timeseries.h"
 #include "test_helpers.h"
 #include "tests.h"
 #include <stdio.h>
@@ -184,11 +186,11 @@ static int test_encode_array_response(void)
 
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
 
-    response_record_t records[2]    = {{.timestamp = 1234567890, .value = 42.5},
+    record_t records[2]             = {{.timestamp = 1234567890, .value = 42.5},
                                        {.timestamp = 1234567891, .value = 43.7}};
 
     response_t resp                 = {.type           = RT_ARRAY,
-                                       .array_response = {.records = records, .length = 2}};
+                                       .array_response = {.items = records, .length = 2}};
 
     ssize_t result                  = encode_response(&resp, buffer);
 
@@ -219,7 +221,7 @@ static int test_encode_empty_array_response(void)
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
 
     response_t resp                 = {.type           = RT_ARRAY,
-                                       .array_response = {.records = NULL, .length = 0}};
+                                       .array_response = {.items = NULL, .length = 0}};
 
     ssize_t result                  = encode_response(&resp, buffer);
 
@@ -299,11 +301,11 @@ static int test_decode_array_response(void)
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(RT_ARRAY, resp.type);
     ASSERT_EQ(2, resp.array_response.length);
-    ASSERT_EQ(1234567890, resp.array_response.records[0].timestamp);
-    ASSERT_EQ(1234567891, resp.array_response.records[1].timestamp);
-    ASSERT_TRUE(resp.array_response.records[0].value == 42.5,
+    ASSERT_EQ(1234567890, resp.array_response.items[0].timestamp);
+    ASSERT_EQ(1234567891, resp.array_response.items[1].timestamp);
+    ASSERT_TRUE(resp.array_response.items[0].value == 42.5,
                 " FAIL: first value doesn't match\n");
-    ASSERT_TRUE(resp.array_response.records[1].value == 43.7,
+    ASSERT_TRUE(resp.array_response.items[1].value == 43.7,
                 " FAIL: second value doesn't match\n");
 
     // Free allocated memory
@@ -328,7 +330,7 @@ static int test_decode_empty_array_response(void)
     ASSERT_EQ(sizeof(data), result);
     ASSERT_EQ(RT_ARRAY, resp.type);
     ASSERT_EQ(0, resp.array_response.length);
-    ASSERT_TRUE(resp.array_response.records == NULL,
+    ASSERT_TRUE(resp.array_response.items == NULL,
                 " FAIL: records should be NULL\n");
 
     // No need to free since records is NULL
@@ -362,28 +364,20 @@ static int test_free_response(void)
 {
     TEST_HEADER;
 
-    response_t resp = {
-        .type           = RT_ARRAY,
-        .array_response = {.records = malloc(2 * sizeof(response_record_t)),
-                           .length  = 2}};
+    response_t resp = {.type = RT_ARRAY};
 
     // Set some values to ensure memory is allocated
-    if (resp.array_response.records) {
-        resp.array_response.records[0].timestamp = 1234567890;
-        resp.array_response.records[0].value     = 42.5;
-        resp.array_response.records[1].timestamp = 1234567891;
-        resp.array_response.records[1].value     = 43.7;
+    record_t r0     = (record_t){.timestamp = 1234567890, .value = 42.5};
+    record_t r1     = (record_t){.timestamp = 1234567891, .value = 43.7};
+    da_append(&resp.array_response, r0);
+    da_append(&resp.array_response, r1);
 
-        free_response(&resp);
+    free_response(&resp);
 
-        // Can't directly test freed memory, but we can check that the pointer
-        // is NULL
-        ASSERT_TRUE(resp.array_response.records == NULL,
-                    " FAIL: records pointer should be NULL after free\n");
-    } else {
-        fprintf(stderr, " FAIL: failed to allocate memory\n");
-        return -1;
-    }
+    // Can't directly test freed memory, but we can check that the pointer
+    // is NULL
+    ASSERT_TRUE(resp.array_response.items == NULL,
+                " FAIL: records pointer should be NULL after free\n");
 
     TEST_FOOTER;
     return 0;
@@ -459,13 +453,13 @@ static int test_array_response_round_trip(void)
     TEST_HEADER;
 
     // Create a small array
-    response_record_t records[3] = {{.timestamp = 1000000001, .value = 10.1},
-                                    {.timestamp = 1000000002, .value = 20.2},
-                                    {.timestamp = 1000000003, .value = 30.3}};
+    record_t records[3]      = {{.timestamp = 1000000001, .value = 10.1},
+                                {.timestamp = 1000000002, .value = 20.2},
+                                {.timestamp = 1000000003, .value = 30.3}};
 
     // Original response
-    response_t resp_original     = {
-            .type = RT_ARRAY, .array_response = {.records = records, .length = 3}};
+    response_t resp_original = {
+        .type = RT_ARRAY, .array_response = {.items = records, .length = 3}};
 
     // Encode
     uint8_t buffer[MAX_BUFFER_SIZE] = {0};
@@ -484,12 +478,12 @@ static int test_array_response_round_trip(void)
 
     // Compare records
     for (size_t i = 0; i < resp_original.array_response.length; i++) {
-        ASSERT_EQ(resp_original.array_response.records[i].timestamp,
-                  resp_decoded.array_response.records[i].timestamp);
+        ASSERT_EQ(resp_original.array_response.items[i].timestamp,
+                  resp_decoded.array_response.items[i].timestamp);
 
         ASSERT_TRUE(
-            fequals(resp_original.array_response.records[i].value,
-                    resp_decoded.array_response.records[i].value),
+            fequals(resp_original.array_response.items[i].value,
+                    resp_decoded.array_response.items[i].value),
             " FAIL: original and decoded values don't be approximately equal");
     }
 

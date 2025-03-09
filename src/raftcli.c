@@ -42,9 +42,8 @@ static void print_response(const response_t *rs)
         printf("%s\n", rs->string_response.message);
     } else {
         for (size_t i = 0; i < rs->array_response.length; ++i)
-            printf("%" PRIu64 " %.6f\n",
-                   rs->array_response.records[i].timestamp,
-                   rs->array_response.records[i].value);
+            printf("%" PRIu64 " %.6f\n", rs->array_response.items[i].timestamp,
+                   rs->array_response.items[i].value);
     }
 }
 

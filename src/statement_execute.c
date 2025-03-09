@@ -1,5 +1,4 @@
 #include "statement_execute.h"
-#include "binary.h"
 #include "buffer.h"
 #include "dbcontext.h"
 #include "tcc.h"
@@ -270,7 +269,6 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
                                                   timeseries_t *ts)
 {
     execute_stmt_result_t result = {0};
-    record_array_t records       = {0};
     uint64_t t0                  = 0ULL;
     uint64_t t1                  = 0ULL;
 
@@ -282,8 +280,9 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
     }
 
     // Range query
-    int err = ts_range(ts, stmt->select.selector.interval.start.value,
-                       stmt->select.selector.interval.end.value, &records);
+    int err =
+        ts_range(ts, stmt->select.selector.interval.start.value,
+                 stmt->select.selector.interval.end.value, &result.result_set);
 
     if (err < 0) {
         result.code = EXEC_ERROR_INVALID_TIMESTAMP;
@@ -294,29 +293,9 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
         return result;
     }
 
-    if (records.length > 0) {
-        // Prepare array response from records
-        result.result_set.records =
-            malloc(records.length * sizeof(*result.result_set.records));
-        if (!result.result_set.records) {
-            result.code = EXEC_ERROR_MEMORY;
-            snprintf(result.message, MESSAGE_SIZE, "Out of memory");
-            return result;
-        }
+    result.code = result.result_set.length == 0 ? EXEC_ERROR_EMPTY_RESULTSET
+                                                : EXEC_SUCCESS_ARRAY;
 
-        for (size_t i = 0; i < records.length; i++) {
-            result.result_set.records[i].timestamp = records.items[i].timestamp;
-            result.result_set.records[i].value     = records.items[i].value;
-        }
-
-        // Free the record array items (data has been copied)
-        free(records.items);
-
-        result.code = EXEC_SUCCESS_ARRAY;
-        return result;
-    }
-
-    result.code = EXEC_ERROR_EMPTY_RESULTSET;
     snprintf(result.message, MESSAGE_SIZE,
              "No data found in range [%" PRIu64 ", %" PRIu64 "]",
              stmt->select.selector.interval.start.value,

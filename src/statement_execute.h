@@ -2,6 +2,7 @@
 #define STATEMENT_EXECUTE_H
 
 #include "statement_parse.h"
+#include "timeseries.h"
 #include <stdlib.h>
 
 #define MESSAGE_SIZE 256
@@ -29,10 +30,7 @@ typedef struct {
     char message[MESSAGE_SIZE];
 
     // For SELECT statements
-    struct {
-        size_t count;
-        stmt_record_t *records; // For results that return records
-    } result_set;
+    record_array_t result_set;
 
     // Metadata about the execution
     int64_t execution_time_ns; // Execution time in nanoseconds
