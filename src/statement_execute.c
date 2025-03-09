@@ -1,6 +1,7 @@
 #include "statement_execute.h"
 #include "buffer.h"
 #include "dbcontext.h"
+#include "encoding.h"
 #include "tcc.h"
 #include "timeutil.h"
 #include <inttypes.h>
@@ -313,11 +314,8 @@ static int stream_callback(const record_array_t *ra, void *user_data)
     if (ctx->error_code != 0)
         return ctx->error_code;
 
-    // Format varies by protocol version
-    size_t bytes_needed;
-
     // Protocol v1: 8 bytes timestamp + 8 bytes value
-    bytes_needed = 16;
+    size_t bytes_needed = 16;
 
     // Check if we need to flush the buffer
     if (ctx->buffer->size - ctx->buffer->read_pos < bytes_needed) {
@@ -328,29 +326,28 @@ static int stream_callback(const record_array_t *ra, void *user_data)
         }
     }
 
-    // Pack the record into the buffer
-    for (size_t i = 0; i < ra->length; ++i) {
+    // Send batch
+    response_t chunk            = {0};
 
-        // uint64_t ts  = htobe64(record->timestamp); // Convert to network byte
-        // order double value = record->value;
+    chunk.type                  = RT_STREAM;
+    chunk.stream_response.batch = *ra;
 
-        // memcpy(ctx->buffer + ctx->buffer_used, &ts, sizeof(ts));
-        // ctx->buffer_used += sizeof(ts);
-        //
-        // memcpy(ctx->buffer + ctx->buffer_used, &value, sizeof(value));
-        // ctx->buffer_used += sizeof(value);
-
-        // Count records sent
-        ctx->records_sent++;
+    // TODO bit of a dirty way to send the chunk
+    ssize_t bytes               = encode_response(&chunk, ctx->buffer->data);
+    if (bytes < 0) {
+        // TODO add proper errors
+        ctx->error_code = -1;
+        return -1;
     }
 
     // Periodically flush based on batch size
-    // if (ctx->records_sent % ctx->batch_size == 0) {
-    //     if (flush_tcp_buffer(ctx) != 0) {
-    //         ctx->error_code = TS_E_NETWORK;
-    //         return TS_E_NETWORK;
-    //     }
-    // }
+    if (ctx->records_sent % ctx->batch_size == 0) {
+        if (tcc_flush_buffer(ctx) != 0) {
+            // TODO add proper errors
+            ctx->error_code = -1;
+            return -1;
+        }
+    }
 
     return 0;
 }
@@ -376,32 +373,11 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
 
     // Query data based on select mask
     if (stmt->select.flags & QF_BASE) {
-        ts_stream(ts, stream_callback, ctx);
-        //     // Single point query
-        //     record_t record;
-        //     if (ts_find(ts, stmt->select.timeunit.tsinterval.start, &record)
-        //     == 0) {
-        //         // Prepare array response with single record
-        //         rs->type                  = RT_ARRAY;
-        //         rs->array_response.length = 1;
-        //         rs->array_response.records =
-        //             malloc(sizeof(*rs->array_response.records));
-        //         if (!rs->array_response.records) {
-        //             set_string_response(rs, 1, "Error: Memory allocation
-        //             failed");
-        //
-        //             return;
-        //         }
-        //         rs->array_response.records[0].timestamp = record.timestamp;
-        //         rs->array_response.records[0].value     = record.value;
-        //
-        //         return;
-        //     }
-        //     set_string_response(rs, 1,
-        //                         "Error: Point not found at timestamp %"
-        //                         PRIu64,
-        //                         stmt->select.timeunit.tsinterval.start);
-        //     return;
+        if (ts_stream(ts, stream_callback, ctx) < 0) {
+            result.code = EXEC_ERROR_EMPTY_RESULTSET;
+            snprintf(result.message, MESSAGE_SIZE, "Unable to stream results");
+            return result;
+        }
     }
 
     if (stmt->select.flags & QF_RNGE) {

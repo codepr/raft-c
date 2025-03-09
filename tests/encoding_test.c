@@ -494,11 +494,299 @@ static int test_array_response_round_trip(void)
     return 0;
 }
 
+static int test_encode_stream_response_single_item(void)
+{
+    TEST_HEADER;
+
+    // Create a response with a single item
+    response_t resp                               = {0};
+    resp.type                                     = RT_STREAM;
+    resp.stream_response.batch.length             = 1;
+    resp.stream_response.batch.items              = malloc(sizeof(record_t));
+    resp.stream_response.batch.items[0].timestamp = 1234567890;
+    resp.stream_response.batch.items[0].value     = 42.5;
+    resp.stream_response.is_final                 = false;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]                     = {0};
+
+    // Encode the response
+    ssize_t result     = encode_response(&resp, buffer);
+
+    // Expected output: "~1\r\n:1234567890\r\n;42.500000\r\n\r\n"
+    uint8_t expected[] = {'~',  '1', '\r', '\n', ':',  '1',  '2', '3',
+                          '4',  '5', '6',  '7',  '8',  '9',  '0', '\r',
+                          '\n', ';', '4',  '2',  '.',  '5',  '0', '0',
+                          '0',  '0', '0',  '\r', '\n', '\r', '\n'};
+
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_EQ(sizeof(expected), result);
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        ASSERT_EQ(expected[i], buffer[i]);
+    }
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_multiple_items(void)
+{
+    TEST_HEADER;
+
+    // Create a response with multiple items
+    response_t resp                   = {0};
+    resp.type                         = RT_STREAM;
+    resp.stream_response.batch.length = 2;
+    resp.stream_response.batch.items  = malloc(2 * sizeof(record_t));
+    resp.stream_response.batch.items[0].timestamp = 1234567890;
+    resp.stream_response.batch.items[0].value     = 42.5;
+    resp.stream_response.batch.items[1].timestamp = 1234567891;
+    resp.stream_response.batch.items[1].value     = 43.7;
+    resp.stream_response.is_final                 = false;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]                     = {0};
+
+    // Encode the response
+    ssize_t result     = encode_response(&resp, buffer);
+
+    // Expected output:
+    // "~2\r\n:1234567890\r\n;42.500000\r\n:1234567891\r\n;43.700000\r\n\r\n"
+    uint8_t expected[] = {
+        '~', '2', '\r', '\n', ':',  '1',  '2',  '3', '4', '5', '6', '7',
+        '8', '9', '0',  '\r', '\n', ';',  '4',  '2', '.', '5', '0', '0',
+        '0', '0', '0',  '\r', '\n', ':',  '1',  '2', '3', '4', '5', '6',
+        '7', '8', '9',  '1',  '\r', '\n', ';',  '4', '3', '.', '7', '0',
+        '0', '0', '0',  '0',  '\r', '\n', '\r', '\n'};
+
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_EQ(sizeof(expected), result);
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        ASSERT_EQ(expected[i], buffer[i]);
+    }
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_final_chunk(void)
+{
+    TEST_HEADER;
+
+    // Create a response with a final chunk flag
+    response_t resp                               = {0};
+    resp.type                                     = RT_STREAM;
+    resp.stream_response.batch.length             = 1;
+    resp.stream_response.batch.items              = malloc(sizeof(record_t));
+    resp.stream_response.batch.items[0].timestamp = 1234567890;
+    resp.stream_response.batch.items[0].value     = 42.5;
+    resp.stream_response.is_final                 = true;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]                     = {0};
+
+    // Encode the response
+    ssize_t result     = encode_response(&resp, buffer);
+
+    // Expected output: "~1\r\n:1234567890\r\n;42.500000\r\n\r\n~0\r\n"
+    uint8_t expected[] = {'~',  '1',  '\r', '\n', ':', '1', '2',  '3',  '4',
+                          '5',  '6',  '7',  '8',  '9', '0', '\r', '\n', ';',
+                          '4',  '2',  '.',  '5',  '0', '0', '0',  '0',  '0',
+                          '\r', '\n', '\r', '\n', '~', '0', '\r', '\n'};
+
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_EQ(sizeof(expected), result);
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        ASSERT_EQ(expected[i], buffer[i]);
+    }
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_empty_batch(void)
+{
+    TEST_HEADER;
+
+    // Create a response with an empty batch
+    response_t resp                   = {0};
+    resp.type                         = RT_STREAM;
+    resp.stream_response.batch.length = 0;
+    resp.stream_response.batch.items  = NULL;
+    resp.stream_response.is_final     = false;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]         = {0};
+
+    // Encode the response
+    ssize_t result                    = encode_response(&resp, buffer);
+
+    // Expected output: "~0\r\n\r\n"
+    uint8_t expected[]                = {'~', '0', '\r', '\n', '\r', '\n'};
+
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_EQ(sizeof(expected), result);
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        ASSERT_EQ(expected[i], buffer[i]);
+    }
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_negative_value(void)
+{
+    TEST_HEADER;
+
+    // Create a response with a negative value
+    response_t resp                               = {0};
+    resp.type                                     = RT_STREAM;
+    resp.stream_response.batch.length             = 1;
+    resp.stream_response.batch.items              = malloc(sizeof(record_t));
+    resp.stream_response.batch.items[0].timestamp = 1234567890;
+    resp.stream_response.batch.items[0].value     = -42.5;
+    resp.stream_response.is_final                 = false;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]                     = {0};
+
+    // Encode the response
+    ssize_t result     = encode_response(&resp, buffer);
+
+    // Expected output: "~1\r\n:1234567890\r\n;-42.500000\r\n\r\n"
+    uint8_t expected[] = {'~',  '1', '\r', '\n', ':',  '1',  '2',  '3',
+                          '4',  '5', '6',  '7',  '8',  '9',  '0',  '\r',
+                          '\n', ';', '-',  '4',  '2',  '.',  '5',  '0',
+                          '0',  '0', '0',  '0',  '\r', '\n', '\r', '\n'};
+
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_EQ(sizeof(expected), result);
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        ASSERT_EQ(expected[i], buffer[i]);
+    }
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_buffer_overflow(void)
+{
+    TEST_HEADER;
+
+    // Create a response with many items to test buffer overflow
+    const size_t HUGE_LENGTH =
+        QUERYSIZE; // This should be large enough to overflow
+
+    response_t resp                   = {0};
+    resp.type                         = RT_STREAM;
+    resp.stream_response.batch.length = HUGE_LENGTH;
+    resp.stream_response.batch.items  = malloc(HUGE_LENGTH * sizeof(record_t));
+
+    for (size_t i = 0; i < HUGE_LENGTH; i++) {
+        resp.stream_response.batch.items[i].timestamp = 1234567890 + i;
+        resp.stream_response.batch.items[i].value     = 42.5 + i;
+    }
+
+    resp.stream_response.is_final = false;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]     = {0};
+
+    // Encode the response - should fail due to buffer overflow
+    ssize_t result                = encode_response(&resp, buffer);
+
+    ASSERT_EQ(-1, result); // Expect failure
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_null_parameters(void)
+{
+    TEST_HEADER;
+
+    // Test with NULL response
+    uint8_t buffer[QUERYSIZE] = {0};
+    ssize_t result            = encode_response(NULL, buffer);
+    ASSERT_EQ(-1, result);
+
+    // Create a valid response
+    response_t resp                               = {0};
+    resp.type                                     = RT_STREAM;
+    resp.stream_response.batch.length             = 1;
+    resp.stream_response.batch.items              = malloc(sizeof(record_t));
+    resp.stream_response.batch.items[0].timestamp = 1234567890;
+    resp.stream_response.batch.items[0].value     = 42.5;
+    resp.stream_response.is_final                 = false;
+
+    // Test with NULL buffer
+    result = encode_response(&resp, NULL);
+    ASSERT_EQ(-1, result);
+
+    // Free allocated memory
+    free(resp.stream_response.batch.items);
+
+    TEST_FOOTER;
+    return 0;
+}
+
+static int test_encode_stream_response_final_empty_batch(void)
+{
+    TEST_HEADER;
+
+    // Create a final empty batch response
+    response_t resp                   = {0};
+    resp.type                         = RT_STREAM;
+    resp.stream_response.batch.length = 0;
+    resp.stream_response.batch.items  = NULL;
+    resp.stream_response.is_final     = true;
+
+    // Buffer to hold the encoded data
+    uint8_t buffer[QUERYSIZE]         = {0};
+
+    // Encode the response
+    ssize_t result                    = encode_response(&resp, buffer);
+
+    // Expected output: "~0\r\n\r\n~0\r\n"
+    uint8_t expected[]                = {'~',  '0', '\r', '\n', '\r',
+                                         '\n', '~', '0',  '\r', '\n'};
+
+    ASSERT_TRUE(result > 0, " FAIL: encoding failed\n");
+    ASSERT_EQ(sizeof(expected), result);
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        ASSERT_EQ(expected[i], buffer[i]);
+    }
+
+    TEST_FOOTER;
+    return 0;
+}
+
 int encoding_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
 
-    int cases   = 19;
+    int cases   = 27;
     int success = cases;
 
     // Request encoding tests
@@ -516,6 +804,14 @@ int encoding_test(void)
     success += test_encode_error_response();
     success += test_encode_array_response();
     success += test_encode_empty_array_response();
+    success += test_encode_stream_response_single_item();
+    success += test_encode_stream_response_multiple_items();
+    success += test_encode_stream_response_final_chunk();
+    success += test_encode_stream_response_empty_batch();
+    success += test_encode_stream_response_negative_value();
+    success += test_encode_stream_response_buffer_overflow();
+    success += test_encode_stream_response_null_parameters();
+    success += test_encode_stream_response_final_empty_batch();
 
     // Response decoding tests
     success += test_decode_string_response();

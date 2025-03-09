@@ -16,6 +16,7 @@
 typedef enum {
     MARKER_STRING_SUCCESS = '$',
     MARKER_STRING_ERROR   = '!',
+    MARKER_STREAM         = '~',
     MARKER_ARRAY          = '#',
     MARKER_TIMESTAMP      = ':',
     MARKER_VALUE          = ';'
@@ -45,7 +46,12 @@ typedef struct {
  */
 typedef record_array_t array_response_t;
 
-typedef enum { RT_STRING, RT_ARRAY } response_type_t;
+typedef struct stream_response {
+    int is_final;
+    record_array_t batch;
+} stream_response_t;
+
+typedef enum { RT_STRING, RT_STREAM, RT_ARRAY } response_type_t;
 
 /*
  * Define a generic response which can either be a string response or an
@@ -55,6 +61,7 @@ typedef struct response {
     response_type_t type;
     union {
         string_response_t string_response;
+        stream_response_t stream_response;
         array_response_t array_response;
     };
 } response_t;

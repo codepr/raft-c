@@ -117,6 +117,133 @@ ssize_t decode_request(const uint8_t *data, request_t *dst)
     return total_length;
 }
 
+static ssize_t encode_array_respose(const response_t *r, uint8_t *dst)
+{
+    // Check unknown response type
+    if (r->type != RT_ARRAY)
+        return -1;
+
+    // Array response
+    dst[0]        = MARKER_ARRAY;
+    size_t offset = 1;
+
+    // Array length
+    size_t n      = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%zu",
+                             r->array_response.length);
+    if (n < 0 || n >= MAX_NUM_STR_LEN)
+        return -1;
+
+    offset += n;
+
+    if (offset + CRLF_LEN >= QUERYSIZE)
+        return -1;
+
+    // CRLF
+    offset = setcrlf(dst, offset);
+
+    // Records
+    for (size_t j = 0; j < r->array_response.length; ++j) {
+        // Check buffer space
+        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+            return -1;
+        }
+
+        // Timestamp
+        dst[offset++] = MARKER_TIMESTAMP;
+        n = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%" PRIu64,
+                     r->array_response.items[j].timestamp);
+        if (n < 0 || n >= MAX_NUM_STR_LEN)
+            return -1;
+
+        offset += n;
+
+        offset = setcrlf(dst, offset);
+
+        // Check buffer space again
+        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+            return -1;
+        }
+
+        // Value
+        dst[offset++] = MARKER_VALUE;
+        n             = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%lf",
+                                 r->array_response.items[j].value);
+        if (n < 0 || n >= MAX_NUM_STR_LEN)
+            return -1;
+
+        offset += n;
+
+        offset = setcrlf(dst, offset);
+    }
+
+    return offset;
+}
+
+/**
+ * Add streaming flag to response
+ * Format: "~<length>\r\n<chunk1>\r\n~<length>\r\n<chunk2>\r\n...~0\r\n"
+ */
+static ssize_t encode_stream_response(const response_t *r, uint8_t *dst)
+{
+    dst[0]         = MARKER_STREAM;
+    ssize_t offset = 1;
+    ssize_t n      = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%zu",
+                              r->stream_response.batch.length);
+
+    if (n < 0 || n >= MAX_NUM_STR_LEN)
+        return -1;
+
+    offset += n;
+    offset = setcrlf(dst, offset);
+
+    // Copy chunk data
+    // Records
+    for (size_t j = 0; j < r->stream_response.batch.length; ++j) {
+        // Check buffer space
+        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+            return -1;
+        }
+
+        // Timestamp
+        dst[offset++] = MARKER_TIMESTAMP;
+        n = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%" PRIu64,
+                     r->stream_response.batch.items[j].timestamp);
+        if (n < 0 || n >= MAX_NUM_STR_LEN)
+            return -1;
+
+        offset += n;
+
+        offset = setcrlf(dst, offset);
+
+        // Check buffer space again
+        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+            return -1;
+        }
+
+        // Value
+        dst[offset++] = MARKER_VALUE;
+        n             = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%lf",
+                                 r->stream_response.batch.items[j].value);
+        if (n < 0 || n >= MAX_NUM_STR_LEN)
+            return -1;
+
+        offset += n;
+
+        offset = setcrlf(dst, offset);
+    }
+
+    offset = setcrlf(dst, offset);
+
+    // Add termination sequence for final chunk
+    if (r->stream_response.is_final) {
+        dst[offset++] = MARKER_STREAM;
+        dst[offset++] = '0';
+        offset        = setcrlf(dst, offset);
+    }
+
+    return offset;
+}
+
 ssize_t encode_response(const response_t *r, uint8_t *dst)
 {
     if (!r || !dst)
@@ -124,7 +251,9 @@ ssize_t encode_response(const response_t *r, uint8_t *dst)
 
     ssize_t pos = 0;
 
-    if (r->type == RT_STRING) {
+    switch (r->type) {
+    case RT_STRING:
+
         // String response
         dst[0]              = r->string_response.rc == 0 ? MARKER_STRING_SUCCESS
                                                          : MARKER_STRING_ERROR;
@@ -134,64 +263,17 @@ ssize_t encode_response(const response_t *r, uint8_t *dst)
         if (string_size < 0)
             return -1;
 
-        return 1 + string_size;
-    }
-
-    // Check unknown response type
-    if (r->type != RT_ARRAY)
-        return -1;
-
-    // Array response
-    dst[0]   = MARKER_ARRAY;
-    pos      = 1;
-
-    // Array length
-    size_t n = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%zu",
-                        r->array_response.length);
-    if (n < 0 || n >= MAX_NUM_STR_LEN)
-        return -1;
-
-    pos += n;
-
-    if (pos + CRLF_LEN >= QUERYSIZE)
-        return -1;
-
-    // CRLF
-    pos = setcrlf(dst, pos);
-
-    // Records
-    for (size_t j = 0; j < r->array_response.length; ++j) {
-        // Check buffer space
-        if (pos + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
-            return -1;
-        }
-
-        // Timestamp
-        dst[pos++] = MARKER_TIMESTAMP;
-        n          = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%" PRIu64,
-                              r->array_response.items[j].timestamp);
-        if (n < 0 || n >= MAX_NUM_STR_LEN)
-            return -1;
-
-        pos += n;
-
-        pos = setcrlf(dst, pos);
-
-        // Check buffer space again
-        if (pos + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
-            return -1;
-        }
-
-        // Value
-        dst[pos++] = MARKER_VALUE;
-        n          = snprintf((char *)dst + pos, MAX_NUM_STR_LEN, "%lf",
-                              r->array_response.items[j].value);
-        if (n < 0 || n >= MAX_NUM_STR_LEN)
-            return -1;
-
-        pos += n;
-
-        pos = setcrlf(dst, pos);
+        pos = 1 + string_size;
+        break;
+    case RT_ARRAY:
+        pos = encode_array_respose(r, dst);
+        break;
+    case RT_STREAM:
+        pos = encode_stream_response(r, dst);
+        break;
+    default:
+        pos = -1;
+        break;
     }
 
     return pos;
