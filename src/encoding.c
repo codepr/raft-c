@@ -122,6 +122,42 @@ ssize_t decode_request(const uint8_t *data, request_t *dst)
     return total_length;
 }
 
+static ssize_t encode_record(const record_t *r, uint8_t *dst, ssize_t offset)
+{
+    // Check buffer space
+    if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+        return -1;
+    }
+
+    // Timestamp
+    dst[offset++] = MARKER_TIMESTAMP;
+    ssize_t n     = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%" PRIu64,
+                             r->timestamp);
+    if (n < 0 || n >= MAX_NUM_STR_LEN)
+        return -1;
+
+    offset += n;
+
+    offset = setcrlf(dst, offset);
+
+    // Check buffer space again
+    if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+        return -1;
+    }
+
+    // Value
+    dst[offset++] = MARKER_VALUE;
+    n = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%lf", r->value);
+    if (n < 0 || n >= MAX_NUM_STR_LEN)
+        return -1;
+
+    offset += n;
+
+    offset = setcrlf(dst, offset);
+
+    return offset;
+}
+
 static ssize_t encode_array_respose(const response_t *r, uint8_t *dst)
 {
     // Check unknown response type
@@ -147,38 +183,11 @@ static ssize_t encode_array_respose(const response_t *r, uint8_t *dst)
     offset = setcrlf(dst, offset);
 
     // Records
-    for (size_t j = 0; j < r->array_response.length; ++j) {
-        // Check buffer space
-        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+    for (size_t i = 0; i < r->array_response.length; ++i) {
+        offset = encode_record(&r->array_response.items[i], dst, offset);
+        // TODO proper error handling
+        if (offset < 0)
             return -1;
-        }
-
-        // Timestamp
-        dst[offset++] = MARKER_TIMESTAMP;
-        n = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%" PRIu64,
-                     r->array_response.items[j].timestamp);
-        if (n < 0 || n >= MAX_NUM_STR_LEN)
-            return -1;
-
-        offset += n;
-
-        offset = setcrlf(dst, offset);
-
-        // Check buffer space again
-        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
-            return -1;
-        }
-
-        // Value
-        dst[offset++] = MARKER_VALUE;
-        n             = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%lf",
-                                 r->array_response.items[j].value);
-        if (n < 0 || n >= MAX_NUM_STR_LEN)
-            return -1;
-
-        offset += n;
-
-        offset = setcrlf(dst, offset);
     }
 
     return offset;
@@ -203,38 +212,11 @@ static ssize_t encode_stream_response(const response_t *r, uint8_t *dst)
 
     // Copy chunk data
     // Records
-    for (size_t j = 0; j < r->stream_response.batch.length; ++j) {
-        // Check buffer space
-        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
+    for (size_t i = 0; i < r->stream_response.batch.length; ++i) {
+        offset = encode_record(&r->stream_response.batch.items[i], dst, offset);
+        // TODO proper error handling
+        if (offset < 0)
             return -1;
-        }
-
-        // Timestamp
-        dst[offset++] = MARKER_TIMESTAMP;
-        n = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%" PRIu64,
-                     r->stream_response.batch.items[j].timestamp);
-        if (n < 0 || n >= MAX_NUM_STR_LEN)
-            return -1;
-
-        offset += n;
-
-        offset = setcrlf(dst, offset);
-
-        // Check buffer space again
-        if (offset + 1 + MAX_NUM_STR_LEN + CRLF_LEN >= QUERYSIZE) {
-            return -1;
-        }
-
-        // Value
-        dst[offset++] = MARKER_VALUE;
-        n             = snprintf((char *)dst + offset, MAX_NUM_STR_LEN, "%lf",
-                                 r->stream_response.batch.items[j].value);
-        if (n < 0 || n >= MAX_NUM_STR_LEN)
-            return -1;
-
-        offset += n;
-
-        offset = setcrlf(dst, offset);
     }
 
     offset = setcrlf(dst, offset);
@@ -366,59 +348,69 @@ static const uint8_t *copy_value(const uint8_t *ptr, char dst[MAX_NUM_STR_LEN],
     return ptr;
 }
 
+static const uint8_t *decode_record(const uint8_t *ptr, record_t *r,
+                                    ssize_t *total_length)
+{
+    // Read timestamp
+    if (*ptr != MARKER_TIMESTAMP)
+        return NULL;
+
+    ptr++;
+    (*total_length)++;
+
+    // Parse timestamp
+    char timestamp_str[MAX_NUM_STR_LEN] = {0};
+    size_t ts_pos                       = 0;
+
+    ptr = copy_value(ptr, timestamp_str, &ts_pos, total_length);
+    if (!ptr)
+        return NULL;
+
+    char *endptr;
+    r->timestamp = strtoull(timestamp_str, &endptr, 10);
+
+    if (*endptr != '\0')
+        return NULL;
+
+    // Skip CRLF
+    ptr = skipcrlf(ptr);
+    *total_length += CRLF_LEN;
+
+    // Check for value marker
+    if (*ptr != MARKER_VALUE)
+        return NULL;
+
+    ptr++;
+    (*total_length)++;
+
+    // Parse value
+    char value_str[MAX_NUM_STR_LEN] = {0};
+    size_t val_pos                  = 0;
+
+    ptr = copy_value(ptr, value_str, &val_pos, total_length);
+    if (!ptr)
+        return NULL;
+
+    r->value = strtold(value_str, &endptr);
+    if (*endptr != '\0')
+        return NULL;
+
+    // Skip CRLF
+    ptr = skipcrlf(ptr);
+    *total_length += CRLF_LEN;
+
+    return ptr;
+}
+
 static ssize_t decode_records(const uint8_t *ptr, response_t *dst)
 {
     ssize_t total_length = 0;
 
-    for (size_t j = 0; j < dst->array_response.length; j++) {
-        // Read timestamp
-        if (*ptr != MARKER_TIMESTAMP)
-            return -1;
-
-        ptr++;
-        total_length++;
-
-        // Parse timestamp
-        char timestamp_str[MAX_NUM_STR_LEN] = {0};
-        size_t ts_pos                       = 0;
-
-        ptr = copy_value(ptr, timestamp_str, &ts_pos, &total_length);
+    for (size_t i = 0; i < dst->array_response.length; i++) {
+        ptr = decode_record(ptr, &dst->array_response.items[i], &total_length);
+        // TODO proper error handling
         if (!ptr)
             return -1;
-
-        char *endptr;
-        dst->array_response.items[j].timestamp =
-            strtoull(timestamp_str, &endptr, 10);
-
-        if (*endptr != '\0')
-            return -1;
-
-        // Skip CRLF
-        ptr = skipcrlf(ptr);
-        total_length += CRLF_LEN;
-
-        // Check for value marker
-        if (*ptr != MARKER_VALUE)
-            return -1;
-
-        ptr++;
-        total_length++;
-
-        // Parse value
-        char value_str[MAX_NUM_STR_LEN] = {0};
-        size_t val_pos                  = 0;
-
-        ptr = copy_value(ptr, value_str, &val_pos, &total_length);
-        if (!ptr)
-            return -1;
-
-        dst->array_response.items[j].value = strtold(value_str, &endptr);
-        if (*endptr != '\0')
-            return -1;
-
-        // Skip CRLF
-        ptr = skipcrlf(ptr);
-        total_length += CRLF_LEN;
     }
 
     return total_length;
@@ -477,51 +469,11 @@ static ssize_t decode_stream_response(const uint8_t *data, response_t *dst,
 
     // Parse records
     for (size_t i = 0; i < batch_length; i++) {
-        // Parse timestamp
-        if (*data != MARKER_TIMESTAMP)
-            goto cleanup_error;
-
-        data++;
-        offset++;
-
-        pos = 0;
-        memset(num_buffer, 0, MAX_NUM_STR_LEN);
-
-        data = copy_value(data, num_buffer, &pos, &offset);
+        data =
+            decode_record(data, &dst->stream_response.batch.items[i], &offset);
+        // TODO proper error hadling
         if (!data)
             goto cleanup_error;
-
-        dst->stream_response.batch.items[i].timestamp =
-            strtoull(num_buffer, &endptr, 10);
-        if (*endptr != '\0')
-            goto cleanup_error;
-
-        // Skip CRLF
-        data = skipcrlf(data);
-        offset += CRLF_LEN;
-
-        // Parse value
-        if (*data != MARKER_VALUE)
-            goto cleanup_error;
-
-        data++;
-        offset++;
-
-        pos = 0;
-        memset(num_buffer, 0, MAX_NUM_STR_LEN);
-
-        data = copy_value(data, num_buffer, &pos, &offset);
-        if (!data)
-            goto cleanup_error;
-
-        dst->stream_response.batch.items[i].value =
-            strtold(num_buffer, &endptr);
-        if (*endptr != '\0')
-            goto cleanup_error;
-
-        // Skip CRLF
-        data = skipcrlf(data);
-        offset += CRLF_LEN;
     }
 
     // Skip blank line (CRLF)
