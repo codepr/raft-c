@@ -6,13 +6,22 @@ static const struct {
     int mul;
 } units[4] = {{'s', 1}, {'m', 60}, {'h', 60 * 60}, {'d', 24 * 60 * 60}};
 
-useconds_t current_micros(void)
+int64_t current_nanos(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    // Converts the time to nanoseconds
+    return (int64_t)(ts.tv_sec * 1000000000 + ts.tv_nsec);
+}
+
+int64_t current_micros(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
     // Converts the time to microseconds
-    return (useconds_t)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
+    return (int64_t)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
 }
 
 time_t current_seconds(void)

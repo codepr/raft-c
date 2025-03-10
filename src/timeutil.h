@@ -5,7 +5,8 @@
 #include <unistd.h>
 
 time_t current_seconds(void);
-useconds_t current_micros(void);
+int64_t current_micros(void);
+int64_t current_nanos(void);
 int clocktime(struct timespec *ts);
 double timespec_seconds(struct timespec *ts);
 time_t timespan_seconds(long long mul, const char *ts);

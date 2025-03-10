@@ -86,7 +86,6 @@ typedef enum {
     TOKEN_AND,
     TOKEN_BETWEEN,
     TOKEN_WHERE,
-    TOKEN_WILDCARD,
     TOKEN_LPAREN,
     TOKEN_RPAREN,
     TOKEN_COMMA,
@@ -598,14 +597,6 @@ static int expect_function(parser_t *p)
 
 static int expect_integer(parser_t *p, int64_t *num)
 {
-    if (parser_peek(p)->type == TOKEN_WILDCARD) {
-
-        if (expect(p, TOKEN_WILDCARD) < 0)
-            return -1;
-
-        *num = -1;
-        return 0;
-    }
     if (expect(p, TOKEN_NUMBER) < 0)
         return -1;
 
@@ -959,7 +950,7 @@ static stmt_t *parse_insert(parser_t *p)
             goto err;
 
         stmt_record_t record = {0};
-        record.timestamp     = current_micros();
+        record.timestamp     = current_nanos();
         if (expect_float(p, &record.value) < 0)
             goto err;
         da_append(&node->insert.record_array, record);
@@ -981,7 +972,7 @@ static stmt_t *parse_insert(parser_t *p)
                     expect(p, TOKEN_LPAREN) < 0 || expect(p, TOKEN_RPAREN) < 0)
                     goto err;
 
-                record.timestamp = current_micros();
+                record.timestamp = current_nanos();
             } else {
                 if (expect_integer(p, &record.timestamp) < 0)
                     goto err;
@@ -1113,8 +1104,8 @@ static stmt_t *parse_select(parser_t *p)
     if (!node)
         return NULL;
 
-    node->type         = STMT_SELECT;
-    node->select.flags = QF_BASE;
+    node->type = STMT_SELECT;
+    node->select.flags |= QF_BASE;
 
     if (expect(p, TOKEN_SELECT) < 0 || parse_select_column(p, node) < 0 ||
         parse_from_clause(p, node) < 0 || parse_between_clause(p, node) < 0 ||

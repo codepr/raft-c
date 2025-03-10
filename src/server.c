@@ -312,11 +312,7 @@ static response_t execute_statement(tcc_t *ctx, const stmt_t *stmt)
     response_t rs = {0};
     if (!stmt) {
         // Handle parse error with a string response
-        rs.type               = RT_STRING;
-        rs.string_response.rc = 1; // Error code
-        rs.string_response.length =
-            snprintf(rs.string_response.message, QUERYSIZE,
-                     "Error: Failed to parse the query");
+        set_string_response(&rs, 1, "Error: Failed to parse the query");
         goto exit;
     }
 
@@ -385,7 +381,7 @@ static ssize_t handle_client(tcc_t *ctx)
     ssize_t bytes_read           = 0;
     ssize_t bytes_written        = 0;
     uint8_t response_buf[BUFSIZ] = {0};
-    stmt_t *stmt                 = {0};
+    stmt_t *stmt                 = NULL;
 
     int err                      = tcc_read_buffer(ctx);
     if (err < 0)

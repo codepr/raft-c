@@ -185,7 +185,7 @@ static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
             return -1;
         break;
     case TU_FUNC:
-        t0 = current_micros();
+        t0 = current_nanos();
         break;
     case TU_SPAN:
         t0 = timespan_seconds(op1->timespan.value, op1->timespan.unit);
@@ -207,7 +207,7 @@ static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
             return -1;
         break;
     case TU_FUNC:
-        t1 = current_micros();
+        t1 = current_nanos();
         break;
     case TU_SPAN:
         t1 = timespan_seconds(op2->timespan.value, op2->timespan.unit);
@@ -249,7 +249,7 @@ static int extract_timestamps(const stmt_selector_t *selector, uint64_t *t0,
             *t0 = unixtime;
             break;
         case TU_FUNC:
-            *t0 = current_micros();
+            *t0 = current_nanos();
             break;
         case TU_SPAN:
             *t0 = timespan_seconds(selector->timeunit.timespan.value,
@@ -318,12 +318,14 @@ static int stream_callback(const record_array_t *ra, void *user_data)
     size_t bytes_needed = 16;
 
     // Check if we need to flush the buffer
-    if (ctx->buffer->size - ctx->buffer->read_pos < bytes_needed) {
+    if (buffer_remaining_read(ctx->buffer) < bytes_needed) {
         if (tcc_flush_buffer(ctx) != 0) {
             // TODO add proper errors
             ctx->error_code = -1;
             return -1;
         }
+
+        buffer_compact(ctx->buffer);
     }
 
     // Send batch
@@ -339,6 +341,8 @@ static int stream_callback(const record_array_t *ra, void *user_data)
         ctx->error_code = -1;
         return -1;
     }
+    // Count records sent
+    ctx->records_sent += ra->length;
 
     // Periodically flush based on batch size
     if (ctx->records_sent % ctx->batch_size == 0) {
@@ -378,6 +382,12 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
             snprintf(result.message, MESSAGE_SIZE, "Unable to stream results");
             return result;
         }
+
+        result.code = EXEC_SUCCESS_STRING;
+        snprintf(result.message, MESSAGE_SIZE, "Streamed '%zu' records",
+                 ctx->records_sent);
+
+        return result;
     }
 
     if (stmt->select.flags & QF_RNGE) {

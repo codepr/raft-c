@@ -246,12 +246,12 @@ typedef struct {
  * - LIMT - Limits the number of results
  */
 typedef enum query_flags {
-    QF_BASE = 0,
-    QF_RNGE = 1 << 0,
-    QF_FUNC = 1 << 1,
-    QF_COND = 1 << 2,
-    QF_SMPL = 1 << 3,
-    QF_LIMT = 1 << 4,
+    QF_BASE = 1 << 0,
+    QF_RNGE = 1 << 1,
+    QF_FUNC = 1 << 2,
+    QF_COND = 1 << 3,
+    QF_SMPL = 1 << 4,
+    QF_LIMT = 1 << 5,
 } query_flags_t;
 
 // Define structure for WHERE clause in SELECT statement
