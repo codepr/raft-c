@@ -45,7 +45,9 @@ int dbcontext_init(size_t size)
             strncmp(namelist[i]->d_name, ".", namelist[i]->d_namlen) == 0 ||
             strncmp(namelist[i]->d_name, "..", namelist[i]->d_namlen) == 0)
             continue;
-        dbcontext_add(namelist[i]->d_name);
+        timeseries_db_t *db = dbcontext_add(namelist[i]->d_name);
+        if (tsdb_load(db) < 0)
+            free(db);
         free(namelist[i]);
         count++;
     }
@@ -101,7 +103,7 @@ timeseries_db_t *dbcontext_add(const char *name)
     }
 
     // Create new database
-    timeseries_db_t *new_db = tsdb_init(name);
+    timeseries_db_t *new_db = tsdb_create(name);
     if (!new_db) {
         return NULL;
     }
@@ -117,7 +119,7 @@ timeseries_db_t *dbcontext_add(const char *name)
     entry->name[DATAPATH_SIZE - 1] = '\0';
     entry->db                      = new_db;
 
-    // Add to hashmap
+    // Add to hashtable
     entry->next                    = tsdb_ht->buckets[bucket];
     tsdb_ht->buckets[bucket]       = entry;
 

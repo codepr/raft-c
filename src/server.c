@@ -478,10 +478,11 @@ static int server_start(int serverfd, int clusterfd)
 
     // Init db context
     int n = dbcontext_init(DBCTX_BASESIZE);
-    if (n < 0)
+    if (n < 0) {
         return -1;
-    else
+    } else {
         log_info("init %d databases", n);
+    }
 
     while (1) {
         numevents = iomux_wait(iomux, -1);

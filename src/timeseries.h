@@ -109,8 +109,7 @@ typedef struct timeseries {
     ts_opts_t opts;
 } timeseries_t;
 
-typedef int (*ts_record_batch_callback_t)(const record_array_t *ra,
-                                          void *userdata);
+typedef int (*ts_stream_callback_t)(const record_array_t *ra, void *userdata);
 
 extern int ts_init(timeseries_t *ts);
 
@@ -125,16 +124,22 @@ extern int ts_range(const timeseries_t *ts, uint64_t t0, uint64_t t1,
 
 extern int ts_scan(const timeseries_t *ts, record_array_t *out);
 
-extern int ts_stream(const timeseries_t *ts,
-                     ts_record_batch_callback_t callback, void *userdata);
+extern int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
+                     void *userdata);
 
 extern void ts_print(const timeseries_t *ts);
 
+typedef struct ts_ht ts_ht_t;
+typedef struct ts_ht_entry ts_ht_entry_t;
+
 typedef struct timeseries_db {
     char datapath[DATAPATH_SIZE];
+    ts_ht_t *ts_hashtable;
 } timeseries_db_t;
 
-extern timeseries_db_t *tsdb_init(const char *datapath);
+extern timeseries_db_t *tsdb_create(const char *datapath);
+
+extern int tsdb_load(timeseries_db_t *tsdb);
 
 extern void tsdb_close(timeseries_db_t *tsdb);
 

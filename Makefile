@@ -60,6 +60,7 @@ TEST_SRC = tests/tests.c                 \
            src/encoding.c                \
            src/statement_parse.c         \
            src/timeseries.c              \
+           src/hash.c                    \
            src/timeutil.c                \
            src/wal.c                     \
            src/storage.c                 \

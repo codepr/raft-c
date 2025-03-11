@@ -1,20 +1,78 @@
 #include "timeseries.h"
 #include "binary.h"
 #include "darray.h"
+#include "hash.h"
 #include "logger.h"
 #include <dirent.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
-static const size_t LINEAR_THRESHOLD = 192;
+static const size_t TS_HASHTABLE_BASESIZE = 64;
+static const size_t LINEAR_THRESHOLD      = 192;
 static const size_t RECORD_BINSIZE = (sizeof(uint64_t) * 2) + sizeof(double_t);
 const char *BASEPATH               = "logdata";
 const size_t TS_MIN_FLUSHSIZE      = 256;  // 256b
 const size_t TS_FLUSHSIZE          = 4096; // 4Kb
 const size_t TS_BATCH_OFFSET       = sizeof(uint64_t) * 3;
 
-timeseries_db_t *tsdb_init(const char *datapath)
+typedef struct ts_ht_entry {
+    timeseries_t *ts;
+    struct ts_ht_entry *next;
+} ts_ht_entry_t;
+
+typedef struct ts_ht {
+    ts_ht_entry_t **buckets;
+    size_t size;
+} ts_ht_t;
+
+static size_t hash_tsname(const char *name, size_t mapsize)
+{
+    uint32_t hash = murmur3_hash((const uint8_t *)name, 0);
+    return hash % mapsize;
+}
+
+static void tsdb_add_ts(timeseries_db_t *tsdb, timeseries_t *ts)
+{
+    if (!tsdb || ts)
+        return;
+
+    size_t bucket        = hash_tsname(ts->name, tsdb->ts_hashtable->size);
+
+    // Check if the timeseries already exists
+    ts_ht_entry_t *entry = tsdb->ts_hashtable->buckets[bucket];
+    while (entry) {
+        if (strncmp(entry->ts->name, ts->name, strlen(ts->name)) == 0) {
+            return;
+        }
+        entry = entry->next;
+    }
+
+    // Add to hashtable
+    entry->next                         = tsdb->ts_hashtable->buckets[bucket];
+    tsdb->ts_hashtable->buckets[bucket] = entry;
+}
+
+static timeseries_t *tsdb_get_ts(const timeseries_db_t *tsdb, const char *name)
+{
+    if (!tsdb) {
+        return NULL;
+    }
+
+    size_t bucket        = hash_tsname(name, tsdb->ts_hashtable->size);
+    ts_ht_entry_t *entry = tsdb->ts_hashtable->buckets[bucket];
+
+    while (entry) {
+        if (strncmp(entry->ts->name, name, strlen(name)) == 0) {
+            return entry->ts;
+        }
+        entry = entry->next;
+    }
+
+    return NULL;
+}
+
+timeseries_db_t *tsdb_create(const char *datapath)
 {
     if (!datapath)
         return NULL;
@@ -34,13 +92,74 @@ timeseries_db_t *tsdb_init(const char *datapath)
     // Create the DB path if it doesn't exist
     char pathbuf[PATHBUF_SIZE];
     snprintf(pathbuf, sizeof(pathbuf), "%s/%s", BASEPATH, tsdb->datapath);
-    if (makedir(pathbuf) < 0)
+    if (makedir(pathbuf) < 0) {
+        free(tsdb);
         return NULL;
+    }
+
+    tsdb->ts_hashtable = calloc(1, sizeof(ts_ht_t));
+    if (!tsdb->ts_hashtable) {
+        free(tsdb);
+        return NULL;
+    }
+
+    tsdb->ts_hashtable->size = TS_HASHTABLE_BASESIZE;
+    tsdb->ts_hashtable->buckets =
+        calloc(TS_HASHTABLE_BASESIZE, sizeof(ts_ht_entry_t *));
+    if (!tsdb->ts_hashtable->buckets) {
+        free(tsdb->ts_hashtable);
+        free(tsdb);
+        return NULL;
+    }
 
     return tsdb;
 }
 
-void tsdb_close(timeseries_db_t *tsdb) { free(tsdb); }
+extern int tsdb_load(timeseries_db_t *tsdb)
+{
+    if (!tsdb)
+        return -1;
+
+    // Scan the main data directory for already existing databases and add them
+    // to the context
+    struct dirent **namelist;
+    int n = scandir(BASEPATH, &namelist, NULL, alphasort);
+    if (n == -1)
+        return -1;
+
+    for (int i = 0; i < n; ++i) {
+        // TODO add some identifiers to db directories
+        if (namelist[i]->d_type != DT_DIR ||
+            strncmp(namelist[i]->d_name, ".", namelist[i]->d_namlen) == 0 ||
+            strncmp(namelist[i]->d_name, "..", namelist[i]->d_namlen) == 0)
+            continue;
+
+        // TODO opts file
+        timeseries_t *ts = ts_create(tsdb, namelist[i]->d_name, (ts_opts_t){0});
+        if (ts)
+            continue;
+
+        tsdb_add_ts(tsdb, ts);
+
+        free(namelist[i]);
+    }
+    return 0;
+}
+
+void tsdb_close(timeseries_db_t *tsdb)
+{
+    for (size_t i = 0; i < tsdb->ts_hashtable->size; ++i) {
+        ts_ht_entry_t *entry = tsdb->ts_hashtable->buckets[i];
+        while (entry) {
+            ts_ht_entry_t *next = entry->next;
+            free(entry);
+            entry = next;
+        }
+    }
+    free(tsdb->ts_hashtable->buckets);
+    free(tsdb->ts_hashtable);
+    free(tsdb);
+}
 
 timeseries_t *ts_create(const timeseries_db_t *tsdb, const char *name,
                         ts_opts_t opts)
@@ -87,7 +206,15 @@ timeseries_t *ts_get(const timeseries_db_t *tsdb, const char *name)
     if (strlen(name) > TS_NAME_MAX_LENGTH)
         return NULL;
 
-    timeseries_t *ts = malloc(sizeof(*ts));
+    // Try to fetch it from memory
+    timeseries_t *ts = NULL;
+
+    ts               = tsdb_get_ts(tsdb, name);
+    if (ts)
+        return ts;
+
+    // Initialize from scratch
+    ts = malloc(sizeof(*ts));
     if (!ts)
         return NULL;
 
@@ -103,6 +230,9 @@ timeseries_t *ts_get(const timeseries_db_t *tsdb, const char *name)
         ts_close(ts);
         return NULL;
     }
+
+    // Add to memory HT
+    tsdb_add_ts((timeseries_db_t *)tsdb, ts);
 
     return ts;
 }
@@ -861,7 +991,7 @@ int ts_scan(const timeseries_t *ts, record_array_t *out)
  * batches so to avoid clogging the memory by restricting the number of records
  * for each iteration.
  */
-int ts_stream(const timeseries_t *ts, ts_record_batch_callback_t callback,
+int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
               void *userdata)
 {
 

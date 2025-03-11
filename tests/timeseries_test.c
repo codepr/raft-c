@@ -290,7 +290,7 @@ int timeseries_test(void)
 
     srand(time(NULL));
 
-    timeseries_db_t *db = tsdb_init("testdb");
+    timeseries_db_t *db = tsdb_create("testdb");
     if (!db)
         return -1;
 
