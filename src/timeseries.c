@@ -7,9 +7,9 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *BASEPATH          = "logdata";
 static const size_t LINEAR_THRESHOLD = 192;
 static const size_t RECORD_BINSIZE = (sizeof(uint64_t) * 2) + sizeof(double_t);
+const char *BASEPATH               = "logdata";
 const size_t TS_MIN_FLUSHSIZE      = 256;  // 256b
 const size_t TS_FLUSHSIZE          = 4096; // 4Kb
 const size_t TS_BATCH_OFFSET       = sizeof(uint64_t) * 3;

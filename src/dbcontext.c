@@ -1,9 +1,10 @@
 #include "dbcontext.h"
 #include "hash.h"
+#include <dirent.h>
 
-#define BASESIZE 64
+const size_t DBCTX_BASESIZE = 64;
 
-tsdb_ht_t *tsdb_ht = NULL;
+tsdb_ht_t *tsdb_ht          = NULL;
 
 static size_t hash_dbname(const char *name, size_t mapsize)
 {
@@ -13,8 +14,10 @@ static size_t hash_dbname(const char *name, size_t mapsize)
 
 int dbcontext_init(size_t size)
 {
+    int count = 0;
+
     if (tsdb_ht != NULL) {
-        return 0; // Already initialized
+        return count; // Already initialized
     }
 
     tsdb_ht = malloc(sizeof(tsdb_ht_t));
@@ -23,16 +26,36 @@ int dbcontext_init(size_t size)
     }
 
     tsdb_ht->buckets = calloc(size, sizeof(tsdb_ht_entry_t *));
-    if (!tsdb_ht->buckets) {
-        free(tsdb_ht);
-        tsdb_ht = NULL;
-        return -1;
-    }
+    if (!tsdb_ht->buckets)
+        goto exit;
 
     tsdb_ht->size      = size;
     tsdb_ht->active_db = NULL;
 
-    return 0;
+    // Scan the main data directory for already existing databases and add them
+    // to the context
+    struct dirent **namelist;
+    int n = scandir(BASEPATH, &namelist, NULL, alphasort);
+    if (n == -1)
+        goto exit;
+
+    for (int i = 0; i < n; ++i) {
+        // TODO add some identifiers to db directories
+        if (namelist[i]->d_type != DT_DIR ||
+            strncmp(namelist[i]->d_name, ".", namelist[i]->d_namlen) == 0 ||
+            strncmp(namelist[i]->d_name, "..", namelist[i]->d_namlen) == 0)
+            continue;
+        dbcontext_add(namelist[i]->d_name);
+        free(namelist[i]);
+        count++;
+    }
+
+    return count;
+
+exit:
+
+    free(tsdb_ht);
+    return -1;
 }
 
 void dbcontext_free(void)
@@ -60,7 +83,7 @@ void dbcontext_free(void)
 timeseries_db_t *dbcontext_add(const char *name)
 {
     if (!tsdb_ht) {
-        if (dbcontext_init(BASESIZE) != 0) {
+        if (dbcontext_init(DBCTX_BASESIZE) < 0) {
             return NULL;
         }
     }

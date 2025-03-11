@@ -26,7 +26,9 @@
 #define TS_E_FLUSH_CHUNK_FAIL     -9
 #define TS_E_INVALID_RANGE        -10
 
+extern const char *BASEPATH;
 extern const size_t TS_FLUSHSIZE;
+extern const size_t TS_MIN_FLUSHSIZE;
 extern const size_t TS_BATCH_OFFSET;
 
 /*

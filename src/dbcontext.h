@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+extern const size_t DBCTX_BASESIZE;
+
 typedef struct db_ht_entry {
     char name[DATAPATH_SIZE];
     timeseries_db_t *db;

@@ -2,6 +2,7 @@
 #include "buffer.h"
 #include "cluster.h"
 #include "config.h"
+#include "dbcontext.h"
 #include "encoding.h"
 #include "iomux.h"
 #include "logger.h"
@@ -474,6 +475,13 @@ static int server_start(int serverfd, int clusterfd)
 
     if (clusterfd > 0)
         iomux_add(iomux, clusterfd, IOMUX_READ);
+
+    // Init db context
+    int n = dbcontext_init(DBCTX_BASESIZE);
+    if (n < 0)
+        return -1;
+    else
+        log_info("init %d databases", n);
 
     while (1) {
         numevents = iomux_wait(iomux, -1);
