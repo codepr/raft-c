@@ -221,7 +221,7 @@ typedef struct {
 
 // Define a pair (timestamp, value) for INSERT statements
 typedef struct stmt_record {
-    int64_t timestamp;
+    stmt_timeunit_t timeunit;
     double_t value;
 } stmt_record_t;
 

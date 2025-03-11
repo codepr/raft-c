@@ -63,7 +63,7 @@ static int parse_insert_test(void)
         stmt_parse("INSERT INTO test-ts values (87829132377, 12.2344)");
 
     ASSERT_EQ(stmt->insert.record_array.length, 1);
-    ASSERT_EQ(stmt->insert.record_array.items[0].timestamp, 87829132377);
+    ASSERT_EQ(stmt->insert.record_array.items[0].timeunit.value, 87829132377);
     ASSERT_FEQ(stmt->insert.record_array.items[0].value, 12.2344);
     ASSERT_SEQ(stmt->insert.ts_name, "test-ts");
 
@@ -131,7 +131,8 @@ static int parse_insert_multi_test(void)
     ASSERT_SEQ(stmt->insert.ts_name, "test-ts");
 
     for (size_t i = 0; i < records_len; ++i) {
-        ASSERT_EQ(stmt->insert.record_array.items[i].timestamp, timestamps[i]);
+        ASSERT_EQ(stmt->insert.record_array.items[i].timeunit.value,
+                  timestamps[i]);
         ASSERT_FEQ(stmt->insert.record_array.items[i].value, values[i]);
     }
 

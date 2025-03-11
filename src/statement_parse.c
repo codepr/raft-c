@@ -949,8 +949,10 @@ static stmt_t *parse_insert(parser_t *p)
         if (expect(p, TOKEN_VALUE) < 0)
             goto err;
 
-        stmt_record_t record = {0};
-        record.timestamp     = current_nanos();
+        stmt_record_t record  = {0};
+        // record.timestamp     = current_nanos();
+        record.timeunit.type  = TU_VALUE;
+        record.timeunit.value = current_nanos();
         if (expect_float(p, &record.value) < 0)
             goto err;
         da_append(&node->insert.record_array, record);
@@ -966,18 +968,9 @@ static stmt_t *parse_insert(parser_t *p)
         do {
             if (expect(p, TOKEN_LPAREN) < 0)
                 goto err;
-            if (parser_peek(p)->type == TOKEN_FUNC_NOW) {
-                // Just consume the tokens till the comma
-                if (expect(p, TOKEN_FUNC_NOW) < 0 ||
-                    expect(p, TOKEN_LPAREN) < 0 || expect(p, TOKEN_RPAREN) < 0)
-                    goto err;
 
-                record.timestamp = current_nanos();
-            } else {
-                if (expect_integer(p, &record.timestamp) < 0)
-                    goto err;
-            }
-            if (expect(p, TOKEN_COMMA) < 0 ||
+            if (parse_timeunit(p, &record.timeunit) < 0 ||
+                expect(p, TOKEN_COMMA) < 0 ||
                 expect_float(p, &record.value) < 0)
                 goto err;
 
@@ -1315,9 +1308,8 @@ void stmt_print(const stmt_t *stmt)
         printf("  INTO: %s\n", stmt->insert.ts_name);
         printf("  VALUES (%zu):\n", stmt->insert.record_array.length);
         for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
-            printf("    [%" PRIu64 "] = %f\n",
-                   stmt->insert.record_array.items[i].timestamp,
-                   stmt->insert.record_array.items[i].value);
+            print_timeunit(&stmt->insert.record_array.items[i].timeunit);
+            printf("    %f\n", stmt->insert.record_array.items[i].value);
         }
         break;
 

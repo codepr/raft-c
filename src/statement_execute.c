@@ -113,63 +113,6 @@ static execute_stmt_result_t execute_create(const stmt_t *stmt)
     return result;
 }
 
-/**
- * Process a INSERT statement and generate appropriate response
- *
- * Attempts to insert point(s) into a specified time-series inside the currently
- * selected database.
- * PRE: A database must be 'active' and the specified time-series must exist
- */
-static execute_stmt_result_t execute_insert(const stmt_t *stmt)
-{
-    execute_stmt_result_t result = {0};
-
-    // Active database not supported yet
-    timeseries_db_t *tsdb        = dbcontext_getactive();
-    if (!tsdb) {
-        result.code = EXEC_ERROR_DB_NOT_FOUND;
-        snprintf(result.message, MESSAGE_SIZE,
-                 "No database found, create one first");
-        return result;
-    }
-
-    timeseries_t *ts = ts_get(tsdb, stmt->insert.ts_name);
-    if (!ts) {
-        result.code = EXEC_ERROR_TS_NOT_FOUND;
-        snprintf(result.message, MESSAGE_SIZE, "Timeseries '%s' not found",
-                 stmt->insert.ts_name);
-        return result;
-    }
-
-    int success_count = 0;
-    int error_count   = 0;
-
-    // Insert each record
-    for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
-        stmt_record_t *record = &stmt->insert.record_array.items[i];
-
-        int result            = ts_insert(ts, record->timestamp, record->value);
-        if (result == 0) {
-            success_count++;
-        } else {
-            error_count++;
-        }
-    }
-
-    result.code = EXEC_SUCCESS_STRING;
-    // Set response based on insertion results
-    if (error_count == 0) {
-        snprintf(result.message, MESSAGE_SIZE,
-                 "Successfully inserted %d points", success_count);
-    } else {
-        snprintf(result.message, MESSAGE_SIZE,
-                 "Inserted %d points with %d errors", success_count,
-                 error_count);
-    }
-
-    return result;
-}
-
 static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
                    binary_op_t binop)
 {
@@ -232,37 +175,45 @@ static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
     return -1;
 }
 
+static int extract_timestamp(const stmt_timeunit_t *tu, uint64_t *timestamp)
+{
+    time_t unixtime = 0LL;
+
+    switch (tu->type) {
+    case TU_VALUE:
+        *timestamp = tu->value;
+        break;
+    case TU_DATE:
+        unixtime = datetime_seconds(tu->date) * 1000000;
+        if (unixtime < 0)
+            return -1;
+        *timestamp = unixtime;
+        break;
+    case TU_FUNC:
+        *timestamp = current_nanos();
+        break;
+    case TU_SPAN:
+        *timestamp = timespan_seconds(tu->timespan.value, tu->timespan.unit);
+        break;
+    case TU_OPS:
+        *timestamp = eval_op(tu->binop.tu1, tu->binop.tu2, tu->binop.binary_op);
+        break;
+    }
+
+    return 0;
+}
+
 static int extract_timestamps(const stmt_selector_t *selector, uint64_t *t0,
                               uint64_t *t1)
 {
     if (selector->type == S_SINGLE) {
-        time_t unixtime = 0LL;
-
-        switch (selector->timeunit.type) {
-        case TU_VALUE:
-            *t0 = selector->timeunit.value;
-            break;
-        case TU_DATE:
-            unixtime = datetime_seconds(selector->timeunit.date) * 1000000;
-            if (unixtime < 0)
-                return -1;
-            *t0 = unixtime;
-            break;
-        case TU_FUNC:
-            *t0 = current_nanos();
-            break;
-        case TU_SPAN:
-            *t0 = timespan_seconds(selector->timeunit.timespan.value,
-                                   selector->timeunit.timespan.unit);
-            break;
-        case TU_OPS:
-            *t0 = eval_op(selector->timeunit.binop.tu1,
-                          selector->timeunit.binop.tu2,
-                          selector->timeunit.binop.binary_op);
-            break;
-        }
+        return extract_timestamp(&selector->timeunit, t0);
+    } else if (selector->type == S_INTERVAL) {
+        if (extract_timestamp(&selector->interval.start, t0) < 0)
+            return -1;
+        if (extract_timestamp(&selector->interval.end, t1) < 0)
+            return -1;
     }
-
     return 0;
 }
 
@@ -281,16 +232,13 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
     }
 
     // Range query
-    int err =
-        ts_range(ts, stmt->select.selector.interval.start.value,
-                 stmt->select.selector.interval.end.value, &result.result_set);
+    int err = ts_range(ts, t0, t1, &result.result_set);
 
     if (err < 0) {
         result.code = EXEC_ERROR_INVALID_TIMESTAMP;
         snprintf(result.message, MESSAGE_SIZE,
-                 "Error: failed to query range [%" PRIu64 ", %" PRIu64 "]",
-                 stmt->select.selector.interval.start.value,
-                 stmt->select.selector.interval.end.value);
+                 "Error: failed to query range [%" PRIu64 ", %" PRIu64 "]", t0,
+                 t1);
         return result;
     }
 
@@ -298,9 +246,8 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
                                                 : EXEC_SUCCESS_ARRAY;
 
     snprintf(result.message, MESSAGE_SIZE,
-             "No data found in range [%" PRIu64 ", %" PRIu64 "]",
-             stmt->select.selector.interval.start.value,
-             stmt->select.selector.interval.end.value);
+             "No data found in range [%" PRIu64 ", %" PRIu64 "]", t0, t1);
+
     return result;
 }
 
@@ -398,6 +345,69 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
     // TODO support WHERE
     snprintf(result.message, MESSAGE_SIZE, "Error: Unsupported query type");
     result.code = EXEC_ERROR_UNSUPPORTED;
+    return result;
+}
+
+/**
+ * Process a INSERT statement and generate appropriate response
+ *
+ * Attempts to insert point(s) into a specified time-series inside the currently
+ * selected database.
+ * PRE: A database must be 'active' and the specified time-series must exist
+ */
+static execute_stmt_result_t execute_insert(const stmt_t *stmt)
+{
+    execute_stmt_result_t result = {0};
+
+    // Active database not supported yet
+    timeseries_db_t *tsdb        = dbcontext_getactive();
+    if (!tsdb) {
+        result.code = EXEC_ERROR_DB_NOT_FOUND;
+        snprintf(result.message, MESSAGE_SIZE,
+                 "No database found, create one first");
+        return result;
+    }
+
+    timeseries_t *ts = ts_get(tsdb, stmt->insert.ts_name);
+    if (!ts) {
+        result.code = EXEC_ERROR_TS_NOT_FOUND;
+        snprintf(result.message, MESSAGE_SIZE, "Timeseries '%s' not found",
+                 stmt->insert.ts_name);
+        return result;
+    }
+
+    int success_count  = 0;
+    int error_count    = 0;
+    uint64_t timestamp = 0;
+
+    // Insert each record
+    for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
+        stmt_record_t *record = &stmt->insert.record_array.items[i];
+
+        if (extract_timestamp(&record->timeunit, &timestamp) < 0) {
+            error_count++;
+            continue;
+        }
+
+        int result = ts_insert(ts, timestamp, record->value);
+        if (result == 0) {
+            success_count++;
+        } else {
+            error_count++;
+        }
+    }
+
+    result.code = EXEC_SUCCESS_STRING;
+    // Set response based on insertion results
+    if (error_count == 0) {
+        snprintf(result.message, MESSAGE_SIZE,
+                 "Successfully inserted %d points", success_count);
+    } else {
+        snprintf(result.message, MESSAGE_SIZE,
+                 "Inserted %d points with %d errors", success_count,
+                 error_count);
+    }
+
     return result;
 }
 
