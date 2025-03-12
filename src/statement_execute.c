@@ -2,6 +2,7 @@
 #include "buffer.h"
 #include "dbcontext.h"
 #include "encoding.h"
+#include "logger.h"
 #include "tcc.h"
 #include "timeutil.h"
 #include <inttypes.h>
@@ -113,10 +114,10 @@ static execute_stmt_result_t execute_create(const stmt_t *stmt)
     return result;
 }
 
-static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
-                   binary_op_t binop)
+static int64_t eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
+                       binary_op_t binop)
 {
-    time_t t0 = 0;
+    int64_t t0 = 0;
 
     switch (op1->type) {
     case TU_VALUE:
@@ -138,9 +139,9 @@ static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
         break;
     }
 
-    time_t t1 = 0;
+    int64_t t1 = 0;
 
-    switch (op1->type) {
+    switch (op2->type) {
     case TU_VALUE:
         t1 = op2->value;
         break;
@@ -163,28 +164,25 @@ static int eval_op(const stmt_timeunit_t *op1, stmt_timeunit_t *op2,
     switch (binop) {
     case BIN_OP_ADD:
         return t0 + t1;
-        break;
     case BIN_OP_SUB:
         return t0 - t1;
-        break;
     case BIN_OP_MUL:
         return t0 * t1;
-        break;
     }
 
     return -1;
 }
 
-static int extract_timestamp(const stmt_timeunit_t *tu, uint64_t *timestamp)
+static int extract_timestamp(const stmt_timeunit_t *tu, int64_t *timestamp)
 {
-    time_t unixtime = 0LL;
+    int64_t unixtime = 0LL;
 
     switch (tu->type) {
     case TU_VALUE:
         *timestamp = tu->value;
         break;
     case TU_DATE:
-        unixtime = datetime_seconds(tu->date) * 1000000;
+        unixtime = datetime_seconds(tu->date);
         if (unixtime < 0)
             return -1;
         *timestamp = unixtime;
@@ -203,8 +201,8 @@ static int extract_timestamp(const stmt_timeunit_t *tu, uint64_t *timestamp)
     return 0;
 }
 
-static int extract_timestamps(const stmt_selector_t *selector, uint64_t *t0,
-                              uint64_t *t1)
+static int extract_timestamps(const stmt_selector_t *selector, int64_t *t0,
+                              int64_t *t1)
 {
     if (selector->type == S_SINGLE) {
         return extract_timestamp(&selector->timeunit, t0);
@@ -221,8 +219,8 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
                                                   timeseries_t *ts)
 {
     execute_stmt_result_t result = {0};
-    uint64_t t0                  = 0ULL;
-    uint64_t t1                  = 0ULL;
+    int64_t t0                   = 0ULL;
+    int64_t t1                   = 0ULL;
 
     if (extract_timestamps(&stmt->select.selector, &t0, &t1) < 0) {
         result.code = EXEC_ERROR_INVALID_TIMESTAMP;
@@ -376,9 +374,9 @@ static execute_stmt_result_t execute_insert(const stmt_t *stmt)
         return result;
     }
 
-    int success_count  = 0;
-    int error_count    = 0;
-    uint64_t timestamp = 0;
+    int success_count = 0;
+    int error_count   = 0;
+    int64_t timestamp = 0;
 
     // Insert each record
     for (size_t i = 0; i < stmt->insert.record_array.length; i++) {
@@ -389,6 +387,7 @@ static execute_stmt_result_t execute_insert(const stmt_t *stmt)
             continue;
         }
 
+        log_info("Inserting %lli -> %lf\n", timestamp, record->value);
         int result = ts_insert(ts, timestamp, record->value);
         if (result == 0) {
             success_count++;

@@ -256,7 +256,10 @@ static bool match_timeunit(string_view_t *source, token_t *token)
 
     size_t unit_len = 1;
     // Special case for "ms"
-    if (source->length > 1 && source->p[i] == 'm' && source->p[i + 1] == 's') {
+    if (source->length > 1 &&
+        ((source->p[i] == 'm' && source->p[i + 1] == 's') ||
+         (source->p[i] == 'n' && source->p[i + 1] == 's') ||
+         (source->p[i] == 'u' && source->p[i + 1] == 's'))) {
         unit_len = 2;
     }
 
@@ -535,9 +538,11 @@ static int expect_operator(parser_t *p)
     switch (t->type) {
     case TOKEN_OPERATOR_EQ:
         break;
+
     case TOKEN_OPERATOR_NE:
         op = OP_NOT_EQUAL;
         break;
+
     case TOKEN_OPERATOR_LE:
         op = OP_LESS_EQUAL;
         break;
@@ -815,17 +820,46 @@ static int parse_binaryop(parser_t *p, stmt_timeunit_t *tu, binary_op_t op)
 {
     // We must save the original values cause we're using unions,
     // which share the same memory layout
-    stmt_tu_type_t original_type = tu->type;
-    function_t original_timefn   = tu->timefn;
-    tu->type                     = TU_OPS;
-    tu->binop.binary_op          = op;
-    tu->binop.tu1                = calloc(1, sizeof(*tu->binop.tu1));
+    stmt_tu_type_t original_type   = tu->type;
+    int64_t original_value         = tu->value;
+    function_t original_fn         = tu->timefn;
+    char original_date[TS_MAXSIZE] = {0};
+    strncpy(original_date, tu->date, strlen(tu->date));
+    int64_t original_timespan_value         = tu->timespan.value;
+    char original_timespan_unit[TS_MAXSIZE] = {0};
+    strncpy(original_timespan_unit, tu->timespan.unit,
+            strlen(tu->timespan.unit));
+
+    tu->binop.tu1 = calloc(1, sizeof(*tu->binop.tu1));
     if (!tu->binop.tu1)
         return -1;
 
-    tu->binop.tu1->type   = original_type;
-    tu->binop.tu1->timefn = original_timefn;
-    tu->binop.tu2         = calloc(1, sizeof(*tu->binop.tu2));
+    tu->binop.tu1->type = original_type;
+
+    switch (original_type) {
+    case TU_VALUE:
+        tu->binop.tu1->value = original_value;
+        break;
+    case TU_FUNC:
+        tu->binop.tu1->timefn = original_fn;
+        break;
+    case TU_DATE:
+        strncpy(tu->binop.tu1->date, original_date, strlen(original_date));
+        break;
+    case TU_SPAN:
+        strncpy(tu->binop.tu1->timespan.unit, original_timespan_unit,
+                strlen(original_timespan_unit));
+        tu->binop.tu1->timespan.value = original_timespan_value;
+        break;
+    default:
+        free(tu->binop.tu1);
+        return -1;
+    }
+
+    tu->type            = TU_OPS;
+    tu->binop.binary_op = op;
+
+    tu->binop.tu2       = calloc(1, sizeof(*tu->binop.tu2));
 
     if (!tu->binop.tu2) {
         free(tu->binop.tu1);
@@ -1239,17 +1273,17 @@ static void print_timeunit(const stmt_timeunit_t *tu)
 {
     switch (tu->type) {
     case TU_VALUE:
-        printf("[%" PRIi64 "]", tu->value);
+        printf("      [%" PRIi64 "]", tu->value);
         break;
     case TU_SPAN:
-        printf("[%" PRIi64 "%s]", tu->timespan.value, tu->timespan.unit);
+        printf("      [%" PRIi64 "%s]", tu->timespan.value, tu->timespan.unit);
         break;
     case TU_FUNC:
         // TOOD placeholder
-        printf("[now()]");
+        printf("      FUNC(now())");
         break;
     case TU_DATE:
-        printf("[%s]", tu->date);
+        printf("      DATE(%s)", tu->date);
         break;
     case TU_OPS:
         print_timeunit(tu->binop.tu1);
@@ -1279,7 +1313,6 @@ void stmt_print(const stmt_t *stmt)
     case STMT_USE:
         printf("USE statement:\n");
         printf("   DB Name: %s\n", stmt->use.ts_name);
-        break;
         break;
 
     case STMT_CREATE:
