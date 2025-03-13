@@ -316,7 +316,7 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
     timeseries_t *ts = ts_get(tsdb, stmt->select.ts_name);
     if (!ts) {
         snprintf(result.message, MESSAGE_SIZE, "Timeseries '%s' not found",
-                 stmt->insert.ts_name);
+                 stmt->select.ts_name);
         return result;
     }
 
@@ -387,7 +387,7 @@ static execute_stmt_result_t execute_insert(const stmt_t *stmt)
             continue;
         }
 
-        log_info("Inserting %lli -> %lf\n", timestamp, record->value);
+        log_info("Insert (%lli, %lf)", timestamp, record->value);
         int result = ts_insert(ts, timestamp, record->value);
         if (result == 0) {
             success_count++;

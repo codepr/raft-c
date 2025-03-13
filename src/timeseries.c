@@ -123,9 +123,9 @@ extern int tsdb_load(timeseries_db_t *tsdb)
     // Scan the main data directory for already existing databases and add them
     // to the context
     struct dirent **namelist;
-    int n = scandir(BASEPATH, &namelist, NULL, alphasort);
+    int n = scandir(tsdb->datapath, &namelist, NULL, alphasort);
     if (n == -1)
-        return -1;
+        return 0;
 
     for (int i = 0; i < n; ++i) {
         // TODO add some identifiers to db directories
@@ -135,9 +135,11 @@ extern int tsdb_load(timeseries_db_t *tsdb)
             continue;
 
         // TODO opts file
-        timeseries_t *ts = ts_create(tsdb, namelist[i]->d_name, (ts_opts_t){0});
-        if (ts)
+        timeseries_t *ts = ts_get(tsdb, namelist[i]->d_name);
+        if (!ts) {
+            free(namelist[i]);
             continue;
+        }
 
         tsdb_add_ts(tsdb, ts);
 
@@ -217,6 +219,10 @@ timeseries_t *ts_get(const timeseries_db_t *tsdb, const char *name)
     ts = malloc(sizeof(*ts));
     if (!ts)
         return NULL;
+
+    ts->partition_nr   = 0;
+    // TODO read from disk meta
+    ts->opts.flushsize = TS_MIN_FLUSHSIZE;
 
     for (int i = 0; i < TS_MAX_PARTITIONS; ++i)
         memset(&ts->partitions[i], 0x00, sizeof(ts->partitions[i]));
@@ -418,6 +424,8 @@ static int ts_chunk_load(ts_chunk_t *tc, const char *pathbuf,
         n -= (sizeof(uint64_t) + sizeof(double_t));
     }
 
+    log_debug("Successfully loaded chunk %ld", n);
+
     free(buf);
 
     return 0;
@@ -471,6 +479,8 @@ int ts_init(timeseries_t *ts)
         if (err < 0)
             goto exit;
     }
+
+    log_debug("Succesfully init timeseries %s", ts->name);
 
     free(namelist);
 

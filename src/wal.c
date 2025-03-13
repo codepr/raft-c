@@ -50,11 +50,13 @@ int wal_load(wal_t *w, const char *path, uint64_t base_timestamp, int main)
     char path_buf[PATHBUF_SIZE];
     snprintf(path_buf, sizeof(path_buf), "%s/wal-%c-%.20" PRIu64 ".log", path,
              t[main], base_timestamp);
-    w->fp = fopen(path_buf, "r");
+    w->fp = fopen(path_buf, "w+");
     if (!w->fp)
         goto errdefer;
 
     w->size = filesize(w->fp, 0);
+
+    log_debug("Successfully loaded WAL %s (%ld)", path_buf, w->size);
 
     return 0;
 
@@ -73,6 +75,7 @@ int wal_append(wal_t *wal, uint64_t ts, double_t value)
     // TODO Fix to handle multiple points in the same timestamp
     if (pwrite(fileno(wal->fp), buf, WAL_RECORDSIZE, wal->size) < 0)
         return -1;
+
     wal->size += WAL_RECORDSIZE;
     return 0;
 }
