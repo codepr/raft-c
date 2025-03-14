@@ -518,7 +518,9 @@ ssize_t decode_response(const uint8_t *data, response_t *dst, size_t datasize)
     uint8_t marker = *data;
     ssize_t length = 0;
 
-    dst->type      = marker == '#' ? RT_ARRAY : RT_STRING;
+    dst->type      = marker == MARKER_ARRAY    ? RT_ARRAY
+                     : marker == MARKER_STREAM ? RT_STREAM
+                                               : RT_STRING;
 
     switch (marker) {
     case MARKER_STRING_SUCCESS:

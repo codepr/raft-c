@@ -1,6 +1,8 @@
+#include "buffer.h"
 #include "client.h"
 #include "encoding.h"
 #include "statement_parse.h"
+#include "tcc.h"
 #include "timeutil.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -40,6 +42,11 @@ static void print_response(const response_t *rs)
 {
     if (rs->type == RT_STRING) {
         printf("%s\n", rs->string_response.message);
+    } else if (rs->type == RT_STREAM) {
+        for (size_t i = 0; i < rs->stream_response.batch.length; ++i)
+            printf("%" PRIu64 " %.6f\n",
+                   rs->stream_response.batch.items[i].timestamp,
+                   rs->stream_response.batch.items[i].value);
     } else {
         for (size_t i = 0; i < rs->array_response.length; ++i)
             printf("%" PRIu64 " %.6f\n", rs->array_response.items[i].timestamp,
@@ -120,10 +127,19 @@ static void runcli(client_t *c)
             }
             continue;
         }
-        client_recv_response(c, &rs);
+        ssize_t result_count = 0;
+        do {
+            client_recv_response(c, &rs);
+            print_response(&rs);
+            result_count += rs.stream_response.batch.length;
+        } while (rs.type == RT_STREAM && rs.stream_response.is_final == 0);
         (void)clocktime(&end_time);
-        print_response(&rs);
-        if (rs.type == RT_ARRAY) {
+        if (rs.type == RT_STREAM) {
+            buffer_decode_response(c->tcc->buffer, &rs);
+            print_response(&rs);
+            delta = timespec_seconds(&end_time) - timespec_seconds(&end_time);
+            printf("%lu results in %lf seconds.\n", result_count, delta);
+        } else if (rs.type == RT_ARRAY) {
             delta = timespec_seconds(&end_time) - timespec_seconds(&end_time);
             printf("%lu results in %lf seconds.\n", rs.array_response.length,
                    delta);

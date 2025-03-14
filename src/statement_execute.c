@@ -259,6 +259,8 @@ static int stream_callback(const record_array_t *ra, void *user_data)
     if (ctx->error_code != 0)
         return ctx->error_code;
 
+    buffer_reset(ctx->buffer);
+
     // Protocol v1: 8 bytes timestamp + 8 bytes value
     size_t bytes_needed = 16;
 
@@ -269,34 +271,31 @@ static int stream_callback(const record_array_t *ra, void *user_data)
             ctx->error_code = -1;
             return -1;
         }
-
-        buffer_compact(ctx->buffer);
     }
 
     // Send batch
-    response_t chunk            = {0};
+    response_t chunk               = {0};
 
-    chunk.type                  = RT_STREAM;
-    chunk.stream_response.batch = *ra;
+    chunk.type                     = RT_STREAM;
+    chunk.stream_response.batch    = *ra;
+    chunk.stream_response.is_final = ra->length < ctx->batch_size;
 
     // TODO bit of a dirty way to send the chunk
-    ssize_t bytes               = encode_response(&chunk, ctx->buffer->data);
+    ssize_t bytes = buffer_encode_response(ctx->buffer, &chunk);
     if (bytes < 0) {
         // TODO add proper errors
         ctx->error_code = -1;
         return -1;
     }
+
+    if (tcc_flush_buffer(ctx) != 0) {
+        // TODO add proper errors
+        ctx->error_code = -1;
+        return -1;
+    }
+
     // Count records sent
     ctx->records_sent += ra->length;
-
-    // Periodically flush based on batch size
-    if (ctx->records_sent % ctx->batch_size == 0) {
-        if (tcc_flush_buffer(ctx) != 0) {
-            // TODO add proper errors
-            ctx->error_code = -1;
-            return -1;
-        }
-    }
 
     return 0;
 }

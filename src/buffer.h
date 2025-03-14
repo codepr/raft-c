@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 // Error codes
 typedef enum {
@@ -44,6 +45,14 @@ buffer_error_t buffer_compact(buffer_t *buf);
 bool buffer_is_empty(const buffer_t *buffer);
 size_t buffer_remaining_read(const buffer_t *buf);
 size_t buffer_remaining_write(const buffer_t *buf);
+
+// Encoding utility functions
+typedef struct request request_t;
+typedef struct response response_t;
+ssize_t buffer_encode_request(buffer_t *buf, const request_t *rq);
+ssize_t buffer_encode_response(buffer_t *buf, const response_t *rs);
+ssize_t buffer_decode_request(buffer_t *buf, request_t *rq);
+ssize_t buffer_decode_response(buffer_t *buf, response_t *rs);
 
 // Network I/O integration
 buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, int nonblocking,

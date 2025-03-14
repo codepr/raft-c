@@ -48,6 +48,8 @@ CLI_SRC = src/client.c            \
           src/encoding.c          \
           src/binary.c            \
           src/statement_parse.c   \
+          src/tcc.c               \
+          src/buffer.c            \
           src/timeutil.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 CLI_EXEC = raft-cli

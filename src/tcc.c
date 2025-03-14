@@ -19,6 +19,7 @@ tcc_t *tcc_create(int fd, int nonblocking)
     }
 
     tcc->fd          = fd;
+    tcc->batch_size  = 1000;
     tcc->nonblocking = nonblocking;
 
     return tcc;

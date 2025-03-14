@@ -26,7 +26,7 @@ typedef enum {
  * Define a basic request, for the time being it's fine to treat
  * every request as a simple string paired with it's length.
  */
-typedef struct {
+typedef struct request {
     size_t length;
     char query[QUERYSIZE];
 } request_t;

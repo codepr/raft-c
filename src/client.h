@@ -8,9 +8,9 @@
 #define CLIENT_FAILURE     -1
 #define CLIENT_UNKNOWN_CMD -2
 
-typedef struct response response_t;
-
+typedef struct tcc tcc_t;
 typedef struct client client_t;
+typedef struct response response_t;
 
 /*
  * Connection options, use this structure to specify connection related opts
@@ -28,7 +28,7 @@ struct connect_options {
  * some options for connection
  */
 struct client {
-    int fd;
+    tcc_t *tcc;
     const struct connect_options *opts;
 };
 

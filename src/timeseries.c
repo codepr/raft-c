@@ -34,7 +34,7 @@ static size_t hash_tsname(const char *name, size_t mapsize)
 
 static void tsdb_add_ts(timeseries_db_t *tsdb, timeseries_t *ts)
 {
-    if (!tsdb || ts)
+    if (!tsdb || !ts)
         return;
 
     size_t bucket        = hash_tsname(ts->name, tsdb->ts_hashtable->size);
@@ -48,9 +48,16 @@ static void tsdb_add_ts(timeseries_db_t *tsdb, timeseries_t *ts)
         entry = entry->next;
     }
 
-    // Add to hashtable
-    entry->next                         = tsdb->ts_hashtable->buckets[bucket];
-    tsdb->ts_hashtable->buckets[bucket] = entry;
+    // Create a new entry
+    ts_ht_entry_t *new_entry = malloc(sizeof(ts_ht_entry_t));
+    if (!new_entry)
+        return; // Memory allocation failed
+
+    new_entry->ts                       = ts;
+
+    // Add to hashtable at the beginning of the linked list
+    new_entry->next                     = tsdb->ts_hashtable->buckets[bucket];
+    tsdb->ts_hashtable->buckets[bucket] = new_entry;
 }
 
 static timeseries_t *tsdb_get_ts(const timeseries_db_t *tsdb, const char *name)
@@ -802,6 +809,8 @@ static void ts_chunk_range(const ts_chunk_t *tc, uint64_t t0, uint64_t t1,
         size_t end = i == high ? idx_high : tc->points[i].length;
 
         for (size_t j = idx_low; j < end + 1; ++j) {
+            if (tc->points[i].length == 0)
+                continue;
             record_t r = da_get(tc->points[i], j);
             if (r.is_set == 1)
                 da_append(out, r);
@@ -1034,12 +1043,12 @@ int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
             if (batch.length > 0) {
                 endts    = da_back(&batch).timestamp;
                 start_ts = batch.items[0].timestamp;
-            }
 
-            // Process each record in the batch
-            if (callback(&batch, userdata) != 0) {
-                ret = -1;
-                goto cleanup;
+                // Process each record in the batch
+                if (callback(&batch, userdata) != 0) {
+                    ret = -1;
+                    goto cleanup;
+                }
             }
 
             if (batch.length < BATCH_SIZE) // End of partition
@@ -1049,7 +1058,9 @@ int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
 
     da_reset(&batch);
 
-    if (ts->prev->base_offset != 0) {
+    if (ts->prev->base_offset != 0 &&
+        ts->prev->points[ts->prev->max_index].length > 0) {
+
         uint64_t endts =
             da_back(&ts->prev->points[ts->prev->max_index]).timestamp;
         uint64_t start_ts = ts->prev->start_ts;
@@ -1060,12 +1071,23 @@ int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
             if (batch.length > 0) {
                 endts    = da_back(&batch).timestamp;
                 start_ts = batch.items[0].timestamp;
+
+                // Process each record in the batch
+                if (callback(&batch, userdata) != 0) {
+                    ret = -1;
+                    goto cleanup;
+                }
             }
+
+            if (batch.length < BATCH_SIZE) // End of partition
+                break;
+
         } while (endts < ts->prev->end_ts);
     }
 
     // Then add from the current chunk if it exists
-    if (ts->head->base_offset != 0) {
+    if (ts->head->base_offset != 0 &&
+        ts->head->points[ts->head->max_index].length > 0) {
 
         uint64_t endts =
             da_back(&ts->head->points[ts->head->max_index]).timestamp;
@@ -1077,7 +1099,17 @@ int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
             if (batch.length > 0) {
                 endts    = da_back(&batch).timestamp;
                 start_ts = batch.items[0].timestamp;
+
+                // Process each record in the batch
+                if (callback(&batch, userdata) != 0) {
+                    ret = -1;
+                    goto cleanup;
+                }
             }
+
+            if (batch.length < BATCH_SIZE) // End of partition
+                break;
+
         } while (endts < ts->head->end_ts);
     }
 

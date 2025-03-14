@@ -31,7 +31,7 @@ int cl_load(commitlog_t *cl, const char *path, uint64_t base)
     char path_buf[PATHBUF_SIZE];
     snprintf(path_buf, sizeof(path_buf), "%s/c-%.20" PRIu64 ".log", path, base);
 
-    cl->fp = fopen(path_buf, "r");
+    cl->fp = fopen(path_buf, "w+");
     if (!cl->fp)
         return -1;
 
@@ -45,19 +45,21 @@ int cl_load(commitlog_t *cl, const char *path, uint64_t base)
 
     size_t size  = buffer.size;
     uint8_t *buf = buffer.data;
+    cl->size     = buffer.size;
 
-    while (size > 0) {
-        record_size = read_i64(buf);
-        size -= record_size;
-        buf += record_size;
+    if (size > 0) {
+        while (size > 0) {
+            record_size = read_i64(buf);
+            size -= record_size;
+            buf += record_size;
+        }
+
+        uint64_t first_ts     = ts_record_timestamp(buffer.data);
+        uint64_t latest_ts    = ts_record_timestamp(buf - record_size);
+
+        cl->current_timestamp = latest_ts;
+        cl->base_ns           = first_ts % (uint64_t)1e9;
     }
-
-    uint64_t first_ts     = ts_record_timestamp(buffer.data);
-    uint64_t latest_ts    = ts_record_timestamp(buf - record_size);
-
-    cl->size              = buffer.size;
-    cl->current_timestamp = latest_ts;
-    cl->base_ns           = first_ts % (uint64_t)1e9;
 
     free(buffer.data);
 

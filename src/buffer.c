@@ -1,4 +1,5 @@
 #include "buffer.h"
+#include "encoding.h"
 #include "network.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -199,6 +200,78 @@ size_t buffer_remaining_write(const buffer_t *buf)
         return 0;
 
     return buf->capacity - buf->write_pos;
+}
+
+ssize_t buffer_encode_request(buffer_t *buf, const request_t *rq)
+{
+    if (!buf || !rq)
+        return BUFFER_ERROR_NULL;
+
+    ssize_t bytes = encode_request(rq, buf->data + buf->write_pos);
+    if (bytes < 0)
+        return -1;
+
+    buf->write_pos += bytes;
+
+    if (buf->write_pos > buf->size) {
+        buf->size = buf->write_pos;
+    }
+
+    return bytes;
+}
+
+ssize_t buffer_encode_response(buffer_t *buf, const response_t *rs)
+{
+    if (!buf || !rs)
+        return BUFFER_ERROR_NULL;
+
+    ssize_t bytes = encode_response(rs, buf->data + buf->write_pos);
+    if (bytes < 0)
+        return -1;
+
+    buf->write_pos += bytes;
+
+    if (buf->write_pos > buf->size) {
+        buf->size = buf->write_pos;
+    }
+
+    return bytes;
+}
+
+ssize_t buffer_decode_request(buffer_t *buf, request_t *rq)
+{
+    if (!buf || !rq)
+        return BUFFER_ERROR_NULL;
+
+    ssize_t bytes = decode_request(buf->data + buf->read_pos, rq);
+    if (bytes < 0)
+        return -1;
+
+    if (buf->read_pos + bytes > buf->size) {
+        return BUFFER_ERROR_UNDERFLOW;
+    }
+
+    buf->read_pos += bytes;
+
+    return bytes;
+}
+
+ssize_t buffer_decode_response(buffer_t *buf, response_t *rs)
+{
+    if (!buf || !rs)
+        return BUFFER_ERROR_NULL;
+
+    ssize_t bytes = decode_response(buf->data + buf->read_pos, rs, buf->size);
+    if (bytes < 0)
+        return -1;
+
+    if (buf->read_pos + bytes > buf->size) {
+        return BUFFER_ERROR_UNDERFLOW;
+    }
+
+    buf->read_pos += bytes;
+
+    return bytes;
 }
 
 buffer_error_t buffer_read_from_fd(buffer_t *buf, int fd, int nonblocking,

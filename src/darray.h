@@ -106,7 +106,7 @@
         }                                                                      \
     } while (0)
 
-#define da_back(da)       (da)->items[(da)->length - 1]
+#define da_back(da)       (da)->items[(da)->length == 0 ? 0 : (da)->length - 1]
 
 #define da_get(da, index) (da).items[(index)]
 
