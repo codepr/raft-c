@@ -11,6 +11,40 @@
 
 static uint64_t timestamps[POINTSNR] = {0};
 
+static int last_timeseries_test(timeseries_t *ts)
+{
+    TEST_HEADER;
+
+    record_t r = {0};
+    if (ts_last(ts, &r) < 0) {
+        fprintf(stderr, " FAIL: ts_last failed\n");
+        return -1;
+    }
+
+    ASSERT_EQ(r.timestamp, timestamps[POINTSNR - 1]);
+
+    TEST_FOOTER;
+
+    return 0;
+}
+
+static int first_timeseries_test(timeseries_t *ts)
+{
+    TEST_HEADER;
+
+    record_t r = {0};
+    if (ts_first(ts, &r) < 0) {
+        fprintf(stderr, " FAIL: ts_first failed\n");
+        return -1;
+    }
+
+    ASSERT_EQ(r.timestamp, timestamps[0]);
+
+    TEST_FOOTER;
+
+    return 0;
+}
+
 static int scan_entire_timeseries_test(timeseries_t *ts)
 {
     TEST_HEADER;
@@ -285,7 +319,7 @@ int timeseries_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
 
-    int cases   = 9;
+    int cases   = 11;
     int success = cases;
 
     srand(time(NULL));
@@ -310,6 +344,8 @@ int timeseries_test(void)
         usleep(rand() % INTERVAL);
     }
 
+    success += last_timeseries_test(ts);
+    success += first_timeseries_test(ts);
     success += scan_entire_timeseries_test(ts);
     success += find_single_record_test(ts);
     success += find_range_records_test(ts);

@@ -130,6 +130,10 @@ extern int ts_scan(const timeseries_t *ts, record_array_t *out,
 extern int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
                      void *userdata);
 
+extern int ts_first(const timeseries_t *ts, record_t *r);
+
+extern int ts_last(const timeseries_t *ts, record_t *r);
+
 extern void ts_print(const timeseries_t *ts);
 
 typedef struct ts_ht ts_ht_t;

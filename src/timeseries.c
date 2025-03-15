@@ -1133,6 +1133,84 @@ cleanup:
     return ret;
 }
 
+int ts_first(const timeseries_t *ts, record_t *r)
+{
+    if (!ts)
+        return -1;
+
+    // Check the first partition first
+    const partition_t *part = &ts->partitions[0];
+
+    if (part->initialized == 1) {
+        uint8_t buf[RECORD_BINSIZE];
+        int err = partition_find(part, buf, part->start_ts);
+        if (err == 0) {
+            // We got a match
+            ts_record_read(r, buf);
+            return 0;
+        }
+    }
+
+    // Check the prev chunk
+    if (ts->prev->base_offset != 0) {
+        for (size_t i = 0; i < TS_CHUNK_SIZE; ++i) {
+            if (ts->prev->points[0].length > 0) {
+                *r = ts->prev->points[0].items[0];
+                return 0;
+            }
+        }
+    }
+
+    // Check the head
+    if (ts->head->base_offset != 0) {
+        for (size_t i = 0; i < TS_CHUNK_SIZE; ++i) {
+            if (ts->head->points[0].length > 0) {
+                *r = ts->head->points[0].items[0];
+                return 0;
+            }
+        }
+    }
+
+    return -1;
+}
+
+int ts_last(const timeseries_t *ts, record_t *r)
+{
+    if (!ts)
+        return -1;
+
+    // Check the first partition first
+    const partition_t *part = &ts->partitions[0];
+
+    if (part->initialized == 1) {
+        uint8_t buf[RECORD_BINSIZE];
+        int err = partition_find(part, buf, part->end_ts);
+        if (err == 0) {
+            // We got a match
+            ts_record_read(r, buf);
+            return 0;
+        }
+    }
+
+    // Check the prev chunk
+    if (ts->prev->base_offset != 0 &&
+        ts->prev->points[ts->prev->max_index].length > 0) {
+        record_array_t *ra = &ts->prev->points[ts->prev->max_index];
+        *r                 = da_back(ra);
+        return 0;
+    }
+
+    // Check the head
+    if (ts->head->base_offset != 0 &&
+        ts->head->points[ts->head->max_index].length > 0) {
+        record_array_t *ra = &ts->head->points[ts->head->max_index];
+        *r                 = da_back(ra);
+        return 0;
+    }
+
+    return 0;
+}
+
 void ts_print(const timeseries_t *ts)
 {
     for (int i = 0; i < TS_CHUNK_SIZE; ++i) {
