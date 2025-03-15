@@ -15,18 +15,34 @@
 
 static const char *cmd_usage(const char *cmd)
 {
+    if (strncasecmp(cmd, "createdb", 8) == 0)
+        return "CREATEDB <database-name>";
+
+    if (strncasecmp(cmd, "use", 3) == 0)
+        return "USE <database-name>";
+
     if (strncasecmp(cmd, "create", 6) == 0)
-        return "CREATE <database-name>|<timeseries-name> [INTO <database "
-               "name>] [retention] [dup policy]";
+        return "CREATE <timeseries-name> [<retention>] [<duplication>]";
+
+    if (strncasecmp(cmd, "insert", 6) == 0)
+        return "INSERT INTO <timeseries-name> VALUES (<timestamp>, <value>) | "
+               "VALUES (<timestamp>, <value>), ... | VALUE <value>";
+
+    if (strncasecmp(cmd, "select", 6) == 0)
+        return "SELECT <value|function(value)> FROM <timeseries-name> [BETWEEN "
+               "<start_time> AND <end_time>] [WHERE value <comparator> "
+               "<value>] [SAMPLE BY <interval>] [LIMIT <n>]";
+
     if (strncasecmp(cmd, "delete", 6) == 0)
-        return "DELETE <database-name>|<timeseries-name>";
-    if (strncasecmp(cmd, "insert", 3) == 0)
-        return "INSERT <timeseries-name> INTO <database-name> timestamp|* "
-               "value, ..";
-    if (strncasecmp(cmd, "select", 5) == 0)
-        return "SELECT <timeseries-name> FROM <database-name> [RANGE|AT] "
-               "start_timestamp [end_timestamp] [WHERE] <identifier> "
-               "[<|>|<=|>=|=|!=] [AGGREGATE] [MIN|MAX|AVG] [BY literal]";
+        return "DELETE <timeseries-name> | DELETE <timeseries-name> FROM "
+               "<database-name>";
+
+    if (strcmp(cmd, ".databases") == 0)
+        return ".databases - List all databases";
+
+    if (strcmp(cmd, ".timeseries") == 0)
+        return ".timeseries - List all timeseries in the active database";
+
     return NULL;
 }
 
@@ -41,15 +57,18 @@ static void prompt(client_t *c)
 static void print_response(const response_t *rs)
 {
     if (rs->type == RT_STRING) {
-        printf("%s\n", rs->string_response.message);
+        printf("(string) %s\n", rs->string_response.message);
     } else if (rs->type == RT_STREAM) {
+        printf("(stream)\n");
         for (size_t i = 0; i < rs->stream_response.batch.length; ++i)
-            printf("%" PRIu64 " %.6f\n",
+            printf("%ld) %" PRIu64 " %.6f\n", i,
                    rs->stream_response.batch.items[i].timestamp,
                    rs->stream_response.batch.items[i].value);
     } else {
+        printf("(array)\n");
         for (size_t i = 0; i < rs->array_response.length; ++i)
-            printf("%" PRIu64 " %.6f\n", rs->array_response.items[i].timestamp,
+            printf("%ld) %" PRIu64 " %.6f\n", i,
+                   rs->array_response.items[i].timestamp,
                    rs->array_response.items[i].value);
     }
 }
@@ -61,9 +80,12 @@ static void print_usage(const char *prog_name)
     exit(EXIT_FAILURE);
 }
 
-static void parse_args(int argc, char *argv[], int *port, int *mode)
+static void parse_args(int argc, char *argv[], int *port, int *mode,
+                       char **dbname)
 {
     int opt;
+    *dbname = NULL;
+
     while ((opt = getopt(argc, argv, "p:d")) != -1) {
         switch (opt) {
         case 'p':
@@ -77,6 +99,9 @@ static void parse_args(int argc, char *argv[], int *port, int *mode)
             break;
         }
     }
+
+    if (optind < argc)
+        *dbname = argv[optind];
 }
 
 static void runclidbg(client_t *c)
@@ -98,7 +123,7 @@ static void runclidbg(client_t *c)
     free(line);
 }
 
-static void runcli(client_t *c)
+static void runcli(client_t *c, const char *dbname)
 {
     int err                    = 0;
     char *line                 = NULL;
@@ -107,6 +132,14 @@ static void runcli(client_t *c)
     struct timespec end_time   = {0};
     response_t rs              = {0};
     double delta               = 0.0;
+
+    if (dbname) {
+        char usecmd[64] = {0};
+        snprintf(usecmd, sizeof(usecmd), "use %s\n", dbname);
+        err = client_send_command(c, usecmd);
+        client_recv_response(c, &rs);
+        print_response(&rs);
+    }
 
     while (1) {
         prompt(c);
@@ -154,8 +187,9 @@ int main(int argc, char **argv)
     int connmode   = AF_INET;
     char *connhost = LOCALHOST;
     int mode       = 1;
+    char *dbname   = NULL;
 
-    parse_args(argc, argv, &connport, &mode);
+    parse_args(argc, argv, &connport, &mode, &dbname);
 
     struct connect_options conn_opts = {.s_family = connmode,
                                         .s_addr   = connhost,
@@ -167,7 +201,7 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
 
     if (mode)
-        runcli(&c);
+        runcli(&c, dbname);
     else
         runclidbg(&c);
 

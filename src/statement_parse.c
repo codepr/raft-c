@@ -479,8 +479,8 @@ static token_t *parser_peek(const parser_t *p) { return &p->tokens[p->pos]; }
 static int expect(parser_t *p, token_type_t type)
 {
     if (p->tokens[p->pos].type != type) {
-        fprintf(stderr, "Unexpected token: '%s' after '%s' at %zu\n",
-                p->tokens[p->pos].value, p->tokens[p->pos - 1].value, p->pos);
+        log_error("Unexpected token: \"%s\" after \"%s\" at %zu\n",
+                  p->tokens[p->pos].value, p->tokens[p->pos - 1].value, p->pos);
         return -1;
     }
 
@@ -560,9 +560,10 @@ static int expect_operator(parser_t *p)
         break;
 
     default:
-        fprintf(stderr, "Unexpected operator token: %s at %zu\n",
-                p->tokens[p->pos].type == EOF ? "EOF" : p->tokens[p->pos].value,
-                p->pos);
+        log_error("Unexpected operator token: \"%s\" at %zu\n",
+                  p->tokens[p->pos].type == EOF ? "EOF"
+                                                : p->tokens[p->pos].value,
+                  p->pos);
         return -1;
     }
     p->pos++;
@@ -591,9 +592,10 @@ static int expect_function(parser_t *p)
         fn = FN_LATEST;
         break;
     default:
-        fprintf(stderr, "Unexpected aggregate fn token: %s at %zu\n",
-                p->tokens[p->pos].type == EOF ? "EOF" : p->tokens[p->pos].value,
-                p->pos);
+        log_error("Unexpected aggregate fn token: %s at %zu\n",
+                  p->tokens[p->pos].type == EOF ? "EOF"
+                                                : p->tokens[p->pos].value,
+                  p->pos);
         return -1;
     }
     p->pos++;
@@ -617,9 +619,9 @@ static int expect_float(parser_t *p, double_t *val)
         return -1;
 
     if (sscanf(p->tokens[p->pos - 1].value, "%lf", &value) != 1) {
-        fprintf(stderr, "Expected float value: %s after %s at %lu\n",
-                p->tokens[p->pos - 1].value, p->tokens[p->pos - 2].value,
-                p->pos);
+        log_error("Expected float value: \"%s\" after \"%s\" at %lu\n",
+                  p->tokens[p->pos - 1].value, p->tokens[p->pos - 2].value,
+                  p->pos);
         return -1;
     }
 

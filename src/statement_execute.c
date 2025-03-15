@@ -328,7 +328,7 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
         }
 
         result.code = EXEC_SUCCESS_STRING;
-        snprintf(result.message, MESSAGE_SIZE, "Streamed '%zu' records",
+        snprintf(result.message, MESSAGE_SIZE, "stream end - %zu records sent",
                  ctx->records_sent);
 
         return result;

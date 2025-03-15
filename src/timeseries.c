@@ -397,7 +397,6 @@ static int ts_chunk_set_record(ts_chunk_t *tc, uint64_t sec, uint64_t nsec,
 static int ts_chunk_load(ts_chunk_t *tc, const char *pathbuf,
                          uint64_t base_timestamp, int main)
 {
-
     int err = wal_load(&tc->wal, pathbuf, base_timestamp, main);
     if (err < 0)
         return TS_E_WAL_LOAD_FAIL;
@@ -463,6 +462,8 @@ int ts_init(timeseries_t *ts)
     if (n == -1)
         goto exit;
 
+    log_debug("Cold start loading timeseries \"%s\"", ts->name);
+
     for (int i = 0; i < n; ++i) {
         const char *dot = strrchr(namelist[i]->d_name, '.');
         if (strncmp(namelist[i]->d_name, "wal-", 4) == 0 &&
@@ -487,7 +488,7 @@ int ts_init(timeseries_t *ts)
             goto exit;
     }
 
-    log_debug("Succesfully init timeseries %s", ts->name);
+    log_debug("Succesfully init timeseries \"%s\"", ts->name);
 
     free(namelist);
 

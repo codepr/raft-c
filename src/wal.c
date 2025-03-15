@@ -24,6 +24,8 @@ int wal_init(wal_t *w, const char *path, uint64_t base_timestamp, int main)
 
     w->size = 0;
 
+    log_debug("Successfully init WAL %s", w->path);
+
     return 0;
 
 errdefer:
@@ -50,7 +52,7 @@ int wal_load(wal_t *w, const char *path, uint64_t base_timestamp, int main)
     char path_buf[PATHBUF_SIZE];
     snprintf(path_buf, sizeof(path_buf), "%s/wal-%c-%.20" PRIu64 ".log", path,
              t[main], base_timestamp);
-    w->fp = fopen(path_buf, "w+");
+    w->fp = fopen(path_buf, "a+");
     if (!w->fp)
         goto errdefer;
 
