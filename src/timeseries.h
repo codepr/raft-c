@@ -122,7 +122,10 @@ extern int ts_find(const timeseries_t *ts, uint64_t timestamp, record_t *r);
 extern int ts_range(const timeseries_t *ts, uint64_t t0, uint64_t t1,
                     record_array_t *out);
 
-extern int ts_scan(const timeseries_t *ts, record_array_t *out);
+typedef int (*ts_scan_filter_t)(const record_t *r, void *userdata);
+
+extern int ts_scan(const timeseries_t *ts, record_array_t *out,
+                   ts_scan_filter_t filter, void *userdata);
 
 extern int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
                      void *userdata);

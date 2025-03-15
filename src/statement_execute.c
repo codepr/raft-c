@@ -320,7 +320,9 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
     }
 
     // Query data based on select mask
-    if (stmt->select.flags & QF_BASE) {
+    if (stmt->select.flags & QF_RNGE) {
+        return execute_select_range(stmt, ts);
+    } else if (stmt->select.flags & QF_BASE) {
         if (ts_stream(ts, stream_callback, ctx) < 0) {
             result.code = EXEC_ERROR_EMPTY_RESULTSET;
             snprintf(result.message, MESSAGE_SIZE, "Unable to stream results");
@@ -332,10 +334,6 @@ static execute_stmt_result_t execute_select(tcc_t *ctx, const stmt_t *stmt)
                  ctx->records_sent);
 
         return result;
-    }
-
-    if (stmt->select.flags & QF_RNGE) {
-        return execute_select_range(stmt, ts);
     }
 
     // Unsupported query type

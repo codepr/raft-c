@@ -17,7 +17,7 @@ static int scan_entire_timeseries_test(timeseries_t *ts)
 
     record_array_t out = {0};
 
-    if (ts_scan(ts, &out) < 0) {
+    if (ts_scan(ts, &out, NULL, NULL) < 0) {
         fprintf(stderr, " FAIL: ts_scan failed\n");
         return -1;
     }
@@ -65,7 +65,7 @@ static int scan_entire_timeseries_out_of_order_test(timeseries_t *ts)
         }
     }
 
-    if (ts_scan(ts, &out) < 0) {
+    if (ts_scan(ts, &out, NULL, NULL) < 0) {
         fprintf(stderr, " FAIL: ts_scan failed\n");
         return -1;
     }

@@ -975,31 +975,45 @@ int ts_range(const timeseries_t *ts, uint64_t start, uint64_t end,
     return 0;
 }
 
-int ts_scan(const timeseries_t *ts, record_array_t *out)
+int ts_scan(const timeseries_t *ts, record_array_t *out,
+            ts_scan_filter_t filter, void *userdata)
 {
     if (!ts || !out)
         return TS_E_NULL_POINTER;
+
+    record_array_t ra = {0};
 
     // Start with the oldest partition
     for (size_t i = 0; i < ts->partition_nr; i++) {
         if (fetch_records_from_partition(&ts->partitions[i],
                                          ts->partitions[i].start_ts,
-                                         ts->partitions[i].end_ts, out) < 0)
+                                         ts->partitions[i].end_ts, &ra) < 0)
             return -1;
     }
 
     // Then add from the previous chunk if it exists
-    if (ts->prev->base_offset != 0) {
+    if (ts->prev->base_offset != 0 &&
+        ts->prev->points[ts->prev->max_index].length > 0) {
         ts_chunk_range(
             ts->prev, ts->prev->start_ts,
-            da_back(&ts->prev->points[ts->prev->max_index]).timestamp, out);
+            da_back(&ts->prev->points[ts->prev->max_index]).timestamp, &ra);
     }
 
     // Then add from the current chunk if it exists
-    if (ts->head->base_offset != 0) {
+    if (ts->head->base_offset != 0 &&
+        ts->head->points[ts->head->max_index].length > 0) {
         ts_chunk_range(
             ts->head, ts->head->start_ts,
-            da_back(&ts->head->points[ts->head->max_index]).timestamp, out);
+            da_back(&ts->head->points[ts->head->max_index]).timestamp, &ra);
+    }
+
+    if (filter && userdata) {
+        for (size_t i = 0; i < ra.length; ++i) {
+            if (filter(&ra.items[i], userdata) == 0)
+                da_append(out, ra.items[i]);
+        }
+    } else {
+        *out = ra;
     }
 
     return 0;
@@ -1007,9 +1021,9 @@ int ts_scan(const timeseries_t *ts, record_array_t *out)
 
 /**
  * Retrieves all the timespace from the paritions and both the head and prev
- * in-memory records. It accepts a callback function to process the records in
- * batches so to avoid clogging the memory by restricting the number of records
- * for each iteration.
+ * in-memory records. It accepts a callback function to process the records
+ * in batches so to avoid clogging the memory by restricting the number of
+ * records for each iteration.
  */
 int ts_stream(const timeseries_t *ts, ts_stream_callback_t callback,
               void *userdata)
