@@ -1066,5 +1066,5 @@ int encoding_test(void)
     printf("\n Test suite summary: %d passed, %d failed\n", success,
            cases - success);
 
-    return 0;
+    return success < cases ? -1 : 0;
 }

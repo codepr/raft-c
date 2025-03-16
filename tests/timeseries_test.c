@@ -45,6 +45,54 @@ static int first_timeseries_test(timeseries_t *ts)
     return 0;
 }
 
+static int avg_sample_timeseries_test(timeseries_t *ts)
+{
+    TEST_HEADER;
+
+    // 1ms interval
+    uint64_t interval_ns = 1000 * (uint64_t)1e6;
+
+    record_array_t out   = {0};
+
+    if (ts_avg_sample(ts, timestamps[25], timestamps[75], interval_ns, &out) <
+        0) {
+        fprintf(stderr, " FAIL: ts_avg_sample failed\n");
+        return -1;
+    }
+
+    ASSERT_TRUE(out.length > 0, "FAIL: Sampled records should be more than 0");
+    for (size_t i = 0; i < out.length; ++i) {
+        ASSERT_TRUE(out.items[i].timestamp % interval_ns == 0,
+                    " FAIL: Sample records should have timestamps multiple of "
+                    "the set interval\n");
+    }
+
+    da_free(&out);
+
+    // 2000us interval
+    interval_ns = 2000 * (uint64_t)1e6;
+
+    if (ts_avg_sample(ts, timestamps[25], timestamps[75], interval_ns, &out) <
+        0) {
+        fprintf(stderr, " FAIL: ts_avg_sample failed\n");
+        return -1;
+    }
+
+    ASSERT_TRUE(out.length > 0,
+                "FAIL: Sampled records should be more than 0\n");
+    for (size_t i = 0; i < out.length; ++i) {
+        ASSERT_TRUE(out.items[i].timestamp % interval_ns == 0,
+                    " FAIL: Sample records should have timestamps multiple of "
+                    "the set interval\n");
+    }
+
+    da_free(&out);
+
+    TEST_FOOTER;
+
+    return 0;
+}
+
 static int scan_entire_timeseries_test(timeseries_t *ts)
 {
     TEST_HEADER;
@@ -319,10 +367,10 @@ int timeseries_test(void)
 {
     printf("* %s\n\n", __FUNCTION__);
 
-    int cases   = 11;
+    int cases   = 12;
     int success = cases;
 
-    srand(time(NULL));
+    srand(47);
 
     timeseries_db_t *db = tsdb_create("testdb");
     if (!db)
@@ -346,6 +394,7 @@ int timeseries_test(void)
 
     success += last_timeseries_test(ts);
     success += first_timeseries_test(ts);
+    success += avg_sample_timeseries_test(ts);
     success += scan_entire_timeseries_test(ts);
     success += find_single_record_test(ts);
     success += find_range_records_test(ts);

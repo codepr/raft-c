@@ -784,7 +784,7 @@ static void ts_chunk_range(const ts_chunk_t *tc, uint64_t t0, uint64_t t1,
 {
     uint64_t sec0 = t0 / (uint64_t)1e9;
     uint64_t sec1 = t1 / (uint64_t)1e9;
-    size_t low, high, idx_low = 0, idx_high = 0;
+    ssize_t low, high, idx_low = 0, idx_high = 0;
     // Find the low
     low             = sec0 - tc->base_offset;
     record_t target = {.timestamp = t0};
@@ -798,6 +798,9 @@ static void ts_chunk_range(const ts_chunk_t *tc, uint64_t t0, uint64_t t1,
     // TODO let it crash on edge cases for now (can this happen now?)
     high             = sec1 - tc->base_offset;
     target.timestamp = t1;
+
+    if (high >= TS_CHUNK_SIZE)
+        high = TS_CHUNK_SIZE - 1;
 
     if (tc->points[high].length < LINEAR_THRESHOLD)
         da_search(&tc->points[high], &target, record_cmp, &idx_high);
@@ -1135,7 +1138,7 @@ cleanup:
 
 int ts_first(const timeseries_t *ts, record_t *r)
 {
-    if (!ts)
+    if (!ts || !r)
         return -1;
 
     // Check the first partition first
@@ -1176,7 +1179,7 @@ int ts_first(const timeseries_t *ts, record_t *r)
 
 int ts_last(const timeseries_t *ts, record_t *r)
 {
-    if (!ts)
+    if (!ts || !r)
         return -1;
 
     // Check the first partition first
@@ -1207,6 +1210,51 @@ int ts_last(const timeseries_t *ts, record_t *r)
         *r                 = da_back(ra);
         return 0;
     }
+
+    return 0;
+}
+
+int ts_avg_sample(const timeseries_t *ts, uint64_t t0, uint64_t t1,
+                  uint64_t interval_ns, record_array_t *out)
+{
+    if (!ts || !out)
+        return -1;
+
+    record_array_t partial = {0};
+    // Normalize to the interval
+    t0                     = (t0 / interval_ns) * interval_ns;
+    if (ts_range(ts, t0, t1, &partial) < 0)
+        // TODO fix error handling
+        return -1;
+
+    uint64_t current = t0 + interval_ns;
+    double_t sum     = 0.0;
+    size_t total     = 0;
+
+    if (partial.length == 0)
+        return 0;
+
+    while (current < t1) {
+        sum   = 0.0;
+        total = 0;
+
+        for (size_t i = 0; i < partial.length; ++i) {
+            if (partial.items[i].timestamp > current - interval_ns &&
+                partial.items[i].timestamp < current) {
+                sum += partial.items[i].value;
+                total++;
+            }
+        }
+
+        double_t value = sum / (double_t)total;
+        if (!isnan(value)) {
+            record_t result = {.timestamp = current, .value = value};
+            da_append(out, result);
+        }
+        current += interval_ns;
+    }
+
+    da_free(&partial);
 
     return 0;
 }

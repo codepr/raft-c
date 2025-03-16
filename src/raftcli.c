@@ -142,6 +142,7 @@ static void runcli(client_t *c, const char *dbname)
     }
 
     while (1) {
+        memset(&rs, 0x00, sizeof(rs));
         prompt(c);
         getline(&line, &line_len, stdin);
         (void)clocktime(&start_time);

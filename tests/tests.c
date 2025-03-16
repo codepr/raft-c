@@ -14,8 +14,8 @@ int main(void)
     outcomes += encoding_test();
     printf("\n");
 
-    printf("\nTests summary: %d passed, %d failed\n", testsuites - outcomes,
-           outcomes == 0 ? 0 : testsuites - (outcomes * -1));
+    printf("\nTests summary: %d passed, %d failed\n", testsuites + outcomes,
+           outcomes == 0 ? 0 : (outcomes * -1));
 
     return outcomes == 0 ? 0 : -1;
 }

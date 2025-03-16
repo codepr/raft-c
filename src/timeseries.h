@@ -134,6 +134,9 @@ extern int ts_first(const timeseries_t *ts, record_t *r);
 
 extern int ts_last(const timeseries_t *ts, record_t *r);
 
+extern int ts_avg_sample(const timeseries_t *ts, uint64_t t0, uint64_t t1,
+                         uint64_t interval_ns, record_array_t *out);
+
 extern void ts_print(const timeseries_t *ts);
 
 typedef struct ts_ht ts_ht_t;
