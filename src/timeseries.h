@@ -134,6 +134,12 @@ extern int ts_first(const timeseries_t *ts, record_t *r);
 
 extern int ts_last(const timeseries_t *ts, record_t *r);
 
+extern int ts_min(const timeseries_t *ts, uint64_t t0, uint64_t t1,
+                  record_t *r);
+
+extern int ts_max(const timeseries_t *ts, uint64_t t0, uint64_t t1,
+                  record_t *r);
+
 extern int ts_avg_sample(const timeseries_t *ts, uint64_t t0, uint64_t t1,
                          uint64_t interval_ns, record_array_t *out);
 

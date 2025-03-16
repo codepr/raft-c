@@ -1214,6 +1214,54 @@ int ts_last(const timeseries_t *ts, record_t *r)
     return 0;
 }
 
+int ts_min(const timeseries_t *ts, uint64_t t0, uint64_t t1, record_t *r)
+{
+    if (!ts)
+        return -1;
+
+    record_array_t out = {0};
+
+    if (ts_range(ts, t0, t1, &out) < 0)
+        return -1;
+
+    if (out.length == 0)
+        return -1;
+
+    *r = out.items[0];
+
+    for (size_t i = 0; i < out.length; ++i)
+        if (out.items[i].value < r->value)
+            *r = out.items[i];
+
+    da_free(&out);
+
+    return 0;
+}
+
+int ts_max(const timeseries_t *ts, uint64_t t0, uint64_t t1, record_t *r)
+{
+    if (!ts)
+        return -1;
+
+    record_array_t out = {0};
+
+    if (ts_range(ts, t0, t1, &out) < 0)
+        return -1;
+
+    if (out.length == 0)
+        return -1;
+
+    *r = out.items[0];
+
+    for (size_t i = 0; i < out.length; ++i)
+        if (out.items[i].value > r->value)
+            *r = out.items[i];
+
+    da_free(&out);
+
+    return 0;
+}
+
 int ts_avg_sample(const timeseries_t *ts, uint64_t t0, uint64_t t1,
                   uint64_t interval_ns, record_array_t *out)
 {
