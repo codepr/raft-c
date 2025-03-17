@@ -1,5 +1,6 @@
 #include "statement_execute.h"
 #include "buffer.h"
+#include "darray.h"
 #include "dbcontext.h"
 #include "encoding.h"
 #include "logger.h"
@@ -226,6 +227,56 @@ static execute_stmt_result_t execute_select_range(const stmt_t *stmt,
         result.code = EXEC_ERROR_INVALID_TIMESTAMP;
         snprintf(result.message, MESSAGE_SIZE,
                  "Selector with invalid timestamp");
+        return result;
+    }
+
+    if (stmt->select.flags & QF_FUNC) {
+        record_t r = {0};
+        switch (stmt->select.function) {
+        case FN_AVG:
+            // TODO
+            break;
+        case FN_MIN:
+            if (ts_min(ts, t0, t1, &r) < 0) {
+                result.code = EXEC_ERROR_INVALID_TIMESTAMP;
+                snprintf(result.message, MESSAGE_SIZE,
+                         "Error: failed to query range [%" PRIu64 ", %" PRIu64
+                         "]",
+                         t0, t1);
+            } else {
+                da_append(&result.result_set, r);
+            }
+            break;
+        case FN_MAX:
+            if (ts_max(ts, t0, t1, &r) < 0) {
+                result.code = EXEC_ERROR_INVALID_TIMESTAMP;
+                snprintf(result.message, MESSAGE_SIZE,
+                         "Error: failed to query range [%" PRIu64 ", %" PRIu64
+                         "]",
+                         t0, t1);
+            } else {
+                da_append(&result.result_set, r);
+            }
+            break;
+        case FN_LATEST:
+            if (ts_last(ts, &r) < 0) {
+                result.code = EXEC_ERROR_INVALID_TIMESTAMP;
+                snprintf(result.message, MESSAGE_SIZE,
+                         "Error: failed to query range [%" PRIu64 ", %" PRIu64
+                         "]",
+                         t0, t1);
+            } else {
+                da_append(&result.result_set, r);
+            }
+            break;
+        default:
+            log_warning("Unknown aggregation function");
+            break;
+        }
+
+        result.code = result.result_set.length == 0 ? EXEC_ERROR_EMPTY_RESULTSET
+                                                    : EXEC_SUCCESS_ARRAY;
+
         return result;
     }
 
