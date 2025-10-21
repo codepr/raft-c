@@ -9,6 +9,10 @@ This project explores distributed systems concepts with a focus on simplicity
 and educational value. It implements a complete distributed time series
 database with leader election, log replication, and automatic sharding.
 
+**NOT FOR PRODUCTION USE** It's not a mature project and some parts are
+yet to be completed, if you intend to test it out you're likely gonna
+incur in some bugs and missing features.
+
 ## Features
 
 The software evolves incrementally with the following features:
